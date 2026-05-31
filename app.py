@@ -1,388 +1,248 @@
-
-# FULL UPDATED APP
-# Changes:
-# 1. Multiple stores can be planned on same day.
-# 2. Same store cannot be planned twice on same day.
-# 3. Pending Stores table added.
-# 4. Dropdown only shows stores not yet planned for selected date.
-# 5. All original features preserved.
-
 import streamlit as st
 import pandas as pd
 import os
-import re
-from datetime import date
+from datetime import date, timedelta
+import plotly.express as px
 
-st.set_page_config(
-    page_title="Beat Plan Management",
-    page_icon="🚀",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
+st.set_page_config(page_title="Beat Plan Pro", page_icon="🚀", layout="wide")
 
+# ====================== STYLING ======================
 st.markdown("""
 <style>
-.stApp {background: linear-gradient(to right,#eef2ff,#f8fafc);}
-[data-testid="stSidebar"] {background: linear-gradient(180deg,#1e3a8a,#312e81);}
-[data-testid="stSidebar"] * {color:white !important;}
-.stButton>button{
-background:linear-gradient(90deg,#2563eb,#7c3aed);
-color:white;border:none;border-radius:12px;font-weight:bold;
-}
-.banner{
-padding:25px;border-radius:18px;
-background:linear-gradient(90deg,#2563eb,#7c3aed);
-color:white;text-align:center;margin-bottom:20px;
-}
-.metric-card{
-background:white;padding:25px;border-radius:18px;
-box-shadow:0 4px 18px rgba(0,0,0,.1);text-align:center;
-}
-.metric-value{font-size:38px;font-weight:bold;color:#2563eb;}
-.metric-label{font-size:16px;color:#64748b;}
+    .stApp {background: linear-gradient(135deg, #f8fafc 0%, #e0e7ff 100%);}
+    .main-header {font-size: 48px; font-weight: bold; background: linear-gradient(90deg, #1e40af, #6d28d9); 
+                  -webkit-background-clip: text; -webkit-text-fill-color: transparent; text-align: center;}
+    .metric-card {
+        background: white; padding: 25px; border-radius: 20px; box-shadow: 0 10px 30px rgba(0,0,0,0.1);
+        text-align: center; border: 1px solid #e2e8f0;
+    }
+    .metric-value {font-size: 42px; font-weight: bold; color: #1e40af;}
+    .metric-label {font-size: 16px; color: #64748b; margin-top: 8px;}
 </style>
 """, unsafe_allow_html=True)
 
-
+# ====================== FILE PATHS ======================
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-
 EMPLOYEE_FILE = os.path.join(BASE_DIR, "Employee_Master.xlsx")
 GST_FILE = os.path.join(BASE_DIR, "GST_Master.xlsx")
 PLANNED_FILE = os.path.join(BASE_DIR, "Planned_Visits.xlsx")
 ADMIN_FILE = os.path.join(BASE_DIR, "Admin_Master.xlsx")
 
-if not os.path.exists(EMPLOYEE_FILE):
-    pd.DataFrame(columns=["EmployeeCode","EmployeeName","Password"]).to_excel(EMPLOYEE_FILE,index=False)
+# Initialize Files if not exist
+for file, cols in [
+    (EMPLOYEE_FILE, ["EmployeeCode","EmployeeName","Password"]),
+    (GST_FILE, ["StoreID","StoreName","GSTNumber","City","EmployeeCode"]),
+    (PLANNED_FILE, ["EmployeeCode","EmployeeName","City","Store","StoreID","VisitDate"]),
+    (ADMIN_FILE, ["Username","Password"])
+]:
+    if not os.path.exists(file):
+        pd.DataFrame(columns=cols).to_excel(file, index=False)
 
-if not os.path.exists(GST_FILE):
-    pd.DataFrame(columns=["StoreID","StoreName","GSTNumber","City","EmployeeCode"]).to_excel(GST_FILE,index=False)
+# Load Data into Session State (Best Practice)
+if "employee_df" not in st.session_state:
+    st.session_state.employee_df = pd.read_excel(EMPLOYEE_FILE)
+if "gst_df" not in st.session_state:
+    st.session_state.gst_df = pd.read_excel(GST_FILE)
+if "planned_df" not in st.session_state:
+    st.session_state.planned_df = pd.read_excel(PLANNED_FILE)
+if "admin_df" not in st.session_state:
+    st.session_state.admin_df = pd.read_excel(ADMIN_FILE)
 
-if not os.path.exists(PLANNED_FILE):
-    pd.DataFrame(columns=["EmployeeCode","EmployeeName","City","Store","StoreID","VisitDate","Planned"]).to_excel(PLANNED_FILE,index=False)
+st.session_state.planned_df["VisitDate"] = pd.to_datetime(st.session_state.planned_df["VisitDate"], errors="coerce")
 
-if not os.path.exists(ADMIN_FILE):
-    pd.DataFrame([{"Username":"admin","Password":"admin123"}]).to_excel(ADMIN_FILE,index=False)
-
-employee_df = pd.read_excel(EMPLOYEE_FILE)
-gst_df = pd.read_excel(GST_FILE)
-planned_df = pd.read_excel(PLANNED_FILE)
-admin_df = pd.read_excel(ADMIN_FILE)
-
-if "VisitDate" in planned_df.columns:
-    planned_df["VisitDate"] = pd.to_datetime(planned_df["VisitDate"], errors="coerce")
-
-for k,v in {"logged_in":False,"role":"","emp_code":"","emp_name":""}.items():
+# Session State for Login
+for k, v in {"logged_in":False, "role":"", "emp_code":"", "emp_name":""}.items():
     if k not in st.session_state:
-        st.session_state[k]=v
+        st.session_state[k] = v
 
-def validate_gst(gst):
-    pattern = r'^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][A-Z0-9]Z[A-Z0-9]$'
-    return bool(re.match(pattern, gst.upper()))
-
+# ====================== LOGIN ======================
 if not st.session_state.logged_in:
+    st.markdown("<h1 class='main-header'>🚀 Beat Plan Pro</h1>", unsafe_allow_html=True)
+    st.markdown("<p style='text-align:center; font-size:18px; color:#475569;'>Smart Store Visit Planning System</p>", unsafe_allow_html=True)
 
-    st.markdown("""<div class="banner"><h1>🚀 Beat Plan Management System</h1><p>Employee Visit Planning & Store Management</p></div>""", unsafe_allow_html=True)
+    login_type = st.radio("Login Type", ["Admin", "Employee"], horizontal=True)
 
-    login_type = st.radio("Login Type",["Admin","Employee"])
-
-    if login_type=="Admin":
-
+    if login_type == "Admin":
         user = st.text_input("Username")
-        pwd = st.text_input("Password",type="password")
-
-        if st.button("Admin Login"):
-
-            x = admin_df[
-                (admin_df["Username"].astype(str)==user) &
-                (admin_df["Password"].astype(str)==pwd)
-            ]
-
-            if x.empty:
-                st.error("Invalid Admin Credentials")
-            else:
-                st.session_state.logged_in=True
-                st.session_state.role="admin"
+        pwd = st.text_input("Password", type="password")
+        if st.button("Admin Login", use_container_width=True):
+            if ((st.session_state.admin_df["Username"].astype(str) == user) & 
+                (st.session_state.admin_df["Password"].astype(str) == pwd)).any():
+                st.session_state.logged_in = True
+                st.session_state.role = "admin"
                 st.rerun()
-
     else:
-
         emp_code = st.text_input("Employee Code")
-        pwd = st.text_input("Password",type="password")
-
-        if st.button("Employee Login"):
-
-            x = employee_df[
-                (employee_df["EmployeeCode"].astype(str)==emp_code) &
-                (employee_df["Password"].astype(str)==pwd)
+        pwd = st.text_input("Password", type="password")
+        if st.button("Employee Login", use_container_width=True):
+            x = st.session_state.employee_df[
+                (st.session_state.employee_df["EmployeeCode"].astype(str)==emp_code) & 
+                (st.session_state.employee_df["Password"].astype(str)==pwd)
             ]
-
-            if x.empty:
-                st.error("Invalid Employee Credentials")
-            else:
-                st.session_state.logged_in=True
-                st.session_state.role="employee"
-                st.session_state.emp_code=x.iloc[0]["EmployeeCode"]
-                st.session_state.emp_name=x.iloc[0]["EmployeeName"]
+            if not x.empty:
+                st.session_state.logged_in = True
+                st.session_state.role = "employee"
+                st.session_state.emp_code = x.iloc[0]["EmployeeCode"]
+                st.session_state.emp_name = x.iloc[0]["EmployeeName"]
                 st.rerun()
-
     st.stop()
 
-if st.sidebar.button("Logout"):
-    for k in ["logged_in","role","emp_code","emp_name"]:
-        st.session_state[k] = False if k=="logged_in" else ""
+if st.sidebar.button("🚪 Logout"):
+    st.session_state.update({"logged_in":False, "role":"", "emp_code":"", "emp_name":""})
     st.rerun()
 
-if st.session_state.role=="admin":
+# ====================== ADMIN PANEL ======================
+if st.session_state.role == "admin":
+    st.sidebar.title("🛠️ Admin Panel")
+    menu = st.sidebar.radio("Menu", ["Dashboard", "Employees", "Stores", "All Plans", "Upload Masters"])
 
-    st.sidebar.title("Admin Panel")
+    if menu == "Dashboard":
+        st.title("📊 Admin Dashboard")
+        df_planned = st.session_state.planned_df
+        df_emp = st.session_state.employee_df
+        df_gst = st.session_state.gst_df
 
-    menu = st.sidebar.radio(
-        "Menu",
-        [
-            "Dashboard",
-            "Upload Employee Master",
-            "Upload GST Master",
-            "Create Employee",
-            "All Employees",
-            "All Stores",
-            "All Visit Plans"
-        ]
-    )
+        total_plans = len(df_planned)
+        total_emp = len(df_emp)
+        total_stores = len(df_gst)
+        today_plans = len(df_planned[df_planned["VisitDate"].dt.date == date.today()])
 
-    if menu=="Dashboard":
+        col1, col2, col3, col4 = st.columns(4)
+        with col1: st.markdown(f'<div class="metric-card"><div class="metric-value">{total_emp}</div><div class="metric-label">👥 Employees</div></div>', unsafe_allow_html=True)
+        with col2: st.markdown(f'<div class="metric-card"><div class="metric-value">{total_stores}</div><div class="metric-label">🏪 Stores</div></div>', unsafe_allow_html=True)
+        with col3: st.markdown(f'<div class="metric-card"><div class="metric-value">{total_plans}</div><div class="metric-label">📅 Total Plans</div></div>', unsafe_allow_html=True)
+        with col4: st.markdown(f'<div class="metric-card"><div class="metric-value">{today_plans}</div><div class="metric-label">📍 Today Plans</div></div>', unsafe_allow_html=True)
 
-        st.title("Admin Dashboard")
-        col1,col2,col3=st.columns(3)
+    elif menu == "Employees":
+        st.title("👥 All Employees")
+        st.dataframe(st.session_state.employee_df, use_container_width=True)
+
+    elif menu == "Stores":
+        st.title("🏪 All Stores")
+        st.dataframe(st.session_state.gst_df, use_container_width=True)
+
+    elif menu == "All Plans":
+        st.title("📋 All Visit Plans")
+        st.dataframe(st.session_state.planned_df.sort_values("VisitDate", ascending=False), use_container_width=True)
+
+        with open(PLANNED_FILE, "rb") as f:
+            st.download_button("📥 Download All Plans", f, "All_Plans.xlsx", use_container_width=True)
+
+    elif menu == "Upload Masters":
+        st.title("📤 Upload Master Files")
+        col1, col2 = st.columns(2)
         with col1:
-            st.markdown(f'<div class="metric-card"><div class="metric-value">{len(employee_df)}</div><div class="metric-label">👨 Employees</div></div>',unsafe_allow_html=True)
+            st.subheader("Employee Master")
+            uploaded_emp = st.file_uploader("Upload Employee Master", type=["xlsx"], key="emp")
+            if uploaded_emp:
+                new_df = pd.read_excel(uploaded_emp)
+                new_df.to_excel(EMPLOYEE_FILE, index=False)
+                st.session_state.employee_df = new_df
+                st.success("✅ Employee Master Updated!")
         with col2:
-            st.markdown(f'<div class="metric-card"><div class="metric-value">{len(gst_df)}</div><div class="metric-label">🏪 Stores</div></div>',unsafe_allow_html=True)
-        with col3:
-            st.markdown(f'<div class="metric-card"><div class="metric-value">{len(planned_df)}</div><div class="metric-label">📅 Visits</div></div>',unsafe_allow_html=True)
+            st.subheader("Store Master")
+            uploaded_gst = st.file_uploader("Upload Store Master", type=["xlsx"], key="gst")
+            if uploaded_gst:
+                new_df = pd.read_excel(uploaded_gst)
+                new_df.to_excel(GST_FILE, index=False)
+                st.session_state.gst_df = new_df
+                st.success("✅ Store Master Updated!")
 
-    elif menu=="Upload Employee Master":
-
-        st.title("Upload Employee Master")
-        file = st.file_uploader("Upload Excel",type=["xlsx"])
-
-        if file:
-            df = pd.read_excel(file)
-            df.to_excel(EMPLOYEE_FILE,index=False)
-            st.success("Employee Master Uploaded")
-
-    elif menu=="Upload GST Master":
-
-        st.title("Upload GST Master")
-        file = st.file_uploader("Upload Excel",type=["xlsx"])
-
-        if file:
-            df = pd.read_excel(file)
-            df.to_excel(GST_FILE,index=False)
-            st.success("GST Master Uploaded")
-
-    elif menu=="Create Employee":
-
-        st.title("Create Employee")
-
-        emp_code = st.text_input("Employee Code")
-        emp_name = st.text_input("Employee Name")
-        password = st.text_input("Password")
-
-        if st.button("Create Employee"):
-
-            if emp_code and emp_name and password:
-
-                new_row = pd.DataFrame([{
-                    "EmployeeCode":emp_code,
-                    "EmployeeName":emp_name,
-                    "Password":password
-                }])
-
-                employee_df = pd.concat([employee_df,new_row],ignore_index=True)
-                employee_df.to_excel(EMPLOYEE_FILE,index=False)
-
-                st.success("Employee Created")
-
-    elif menu=="All Employees":
-        st.title("All Employees")
-        st.dataframe(employee_df,use_container_width=True)
-
-    elif menu=="All Stores":
-        st.title("All Stores")
-        st.dataframe(gst_df,use_container_width=True)
-
-    elif menu=="All Visit Plans":
-
-        st.title("All Employee Visit Plans")
-
-        if not planned_df.empty:
-
-            employee_list = ["All"] + sorted(
-                planned_df["EmployeeName"].dropna().astype(str).unique().tolist()
-            )
-
-            selected_employee = st.selectbox("Employee Filter",employee_list)
-
-            display_df = planned_df.copy()
-
-            if selected_employee != "All":
-                display_df = display_df[display_df["EmployeeName"] == selected_employee]
-
-            st.dataframe(display_df,use_container_width=True)
-
-            with open(PLANNED_FILE,"rb") as f:
-                st.download_button(
-                    "Download All Visit Plans",
-                    f,
-                    file_name="All_Employee_Visit_Plans.xlsx"
-                )
-
+# ====================== EMPLOYEE PANEL ======================
 else:
+    emp_code = st.session_state.emp_code
+    emp_name = st.session_state.emp_name
 
-    employee_code = st.session_state.emp_code
-    employee_name = st.session_state.emp_name
+    st.sidebar.title(f"👤 {emp_name}")
+    menu = st.sidebar.radio("Menu", ["Beat Plan", "My Plans", "Upcoming Plans", "Add New Store"])
 
-    st.sidebar.title(employee_name)
+    employee_stores = st.session_state.gst_df[st.session_state.gst_df["EmployeeCode"].astype(str) == str(emp_code)]
 
-    menu = st.sidebar.radio("Menu",["Beat Plan","Add New Store"])
-
-    if menu=="Add New Store":
-
-        st.title("Add New Store")
-
-        gst_no = st.text_input("GST Number")
-        city = st.text_input("City")
-        store_name = st.text_input("Store Name")
-
-        if st.button("Save Store"):
-
-            gst_no = gst_no.upper().strip()
-
-            if not validate_gst(gst_no):
-                st.error("Invalid GST Number")
-
-            elif gst_df["GSTNumber"].astype(str).str.upper().eq(gst_no).any():
-                st.error("GST Already Exists")
-
-            else:
-
-                next_id = f"S{len(gst_df)+1:05}"
-
-                new_store = pd.DataFrame([{
-                    "StoreID":next_id,
-                    "StoreName":store_name.upper(),
-                    "GSTNumber":gst_no,
-                    "City":city.upper(),
-                    "EmployeeCode":employee_code
-                }])
-
-                gst_df = pd.concat([gst_df,new_store],ignore_index=True)
-                gst_df.to_excel(GST_FILE,index=False)
-
-                st.success("Store Added Successfully")
-
-    else:
-
-        st.title("Beat Plan")
-
-        employee_stores = gst_df[
-            gst_df["EmployeeCode"].astype(str)==str(employee_code)
-        ]
+    if menu == "Beat Plan":
+        st.title("🎯 Create New Beat Plan")
 
         if employee_stores.empty:
-            st.warning("No Stores Available")
+            st.warning("No stores assigned yet.")
             st.stop()
 
-        city = st.selectbox(
-            "City",
-            sorted(employee_stores["City"].dropna().astype(str).unique())
-        )
-
+        city = st.selectbox("Select City", sorted(employee_stores["City"].dropna().unique()))
         visit_date = st.date_input("Visit Date", value=date.today())
 
-        stores_df = employee_stores[
-            employee_stores["City"].astype(str)==city
-        ].copy()
+        city_stores = employee_stores[employee_stores["City"] == city].copy()
+        city_stores["Display"] = city_stores["StoreName"] + " (" + city_stores["StoreID"] + ")"
 
-        stores_df["Display"] = (
-            stores_df["StoreName"].astype(str)
-            + " (" +
-            stores_df["StoreID"].astype(str)
-            + ")"
-        )
-
-        planned_store_ids = planned_df[
-            (planned_df["EmployeeCode"].astype(str)==str(employee_code))
-            &
-            (planned_df["VisitDate"].dt.date==visit_date)
+        planned_today = st.session_state.planned_df[
+            (st.session_state.planned_df["EmployeeCode"].astype(str) == str(emp_code)) &
+            (st.session_state.planned_df["VisitDate"].dt.date == visit_date)
         ]["StoreID"].astype(str).tolist()
 
-        available_stores = stores_df[
-            ~stores_df["StoreID"].astype(str).isin(planned_store_ids)
-        ]
+        available_stores = city_stores[~city_stores["StoreID"].astype(str).isin(planned_today)]
 
-        st.subheader("Pending Stores")
-
-        pending_stores = available_stores[
-            ["StoreID","StoreName","City","GSTNumber"]
-        ]
-
-        st.dataframe(pending_stores,use_container_width=True)
-
+        st.subheader("📌 Pending Stores")
         if available_stores.empty:
-            st.success("All stores already planned for selected date.")
+            st.success("✅ All stores already planned for this date.")
         else:
+            st.dataframe(available_stores[["StoreID", "StoreName", "GSTNumber"]], use_container_width=True)
 
-            selected_store = st.selectbox(
-                "Store",
-                available_stores["Display"]
-            )
+            selected_store = st.selectbox("Select Store", available_stores["Display"])
 
-            if st.button("Save Visit"):
+            if st.button("✅ Save Visit Plan", type="primary", use_container_width=True):
+                row = available_stores[available_stores["Display"] == selected_store].iloc[0]
 
-                row = available_stores[
-                    available_stores["Display"]==selected_store
-                ].iloc[0]
+                new_plan = pd.DataFrame([{
+                    "EmployeeCode": emp_code,
+                    "EmployeeName": emp_name,
+                    "City": city,
+                    "Store": row["StoreName"],
+                    "StoreID": row["StoreID"],
+                    "VisitDate": pd.to_datetime(visit_date)
+                }])
 
-                store_id = str(row["StoreID"])
+                st.session_state.planned_df = pd.concat([st.session_state.planned_df, new_plan], ignore_index=True)
+                st.session_state.planned_df.to_excel(PLANNED_FILE, index=False)
 
-                duplicate = planned_df[
-                    (planned_df["EmployeeCode"].astype(str)==str(employee_code))
-                    &
-                    (planned_df["StoreID"].astype(str)==store_id)
-                    &
-                    (planned_df["VisitDate"].dt.date==visit_date)
-                ]
+                st.success(f"✅ Plan saved for **{row['StoreName']}**!")
+                st.rerun()
 
-                if duplicate.empty:
+    elif menu == "My Plans":
+        st.title("📅 My Plans")
+        my_plans = st.session_state.planned_df[st.session_state.planned_df["EmployeeCode"].astype(str) == str(emp_code)]
+        if my_plans.empty:
+            st.info("No plans created yet.")
+        else:
+            st.dataframe(my_plans.sort_values("VisitDate", ascending=False), use_container_width=True)
 
-                    new_visit = pd.DataFrame([{
-                        "EmployeeCode":employee_code,
-                        "EmployeeName":employee_name,
-                        "City":city,
-                        "Store":row["StoreName"],
-                        "StoreID":store_id,
-                        "VisitDate":pd.to_datetime(visit_date),
-                        "Planned":True
-                    }])
+    elif menu == "Upcoming Plans":
+        st.title("📆 Upcoming Plans")
+        upcoming = st.session_state.planned_df[
+            (st.session_state.planned_df["EmployeeCode"].astype(str) == str(emp_code)) &
+            (st.session_state.planned_df["VisitDate"].dt.date >= date.today())
+        ].sort_values("VisitDate")
 
-                    planned_df = pd.concat(
-                        [planned_df,new_visit],
-                        ignore_index=True
-                    )
+        if not upcoming.empty:
+            st.dataframe(upcoming, use_container_width=True)
+        else:
+            st.info("No upcoming plans.")
 
-                    planned_df.to_excel(PLANNED_FILE,index=False)
+    elif menu == "Add New Store":
+        st.title("➕ Add New Store")
+        gst_no = st.text_input("GST Number").upper().strip()
+        city = st.text_input("City").upper()
+        store_name = st.text_input("Store Name").upper()
 
-                    st.success("Visit Saved")
-                    st.rerun()
-
+        if st.button("Save Store", use_container_width=True):
+            if gst_no and city and store_name:
+                if st.session_state.gst_df["GSTNumber"].astype(str).str.upper().eq(gst_no).any():
+                    st.error("GST already exists!")
                 else:
-                    st.warning("Visit Already Planned")
-
-        st.subheader("My Visits")
-
-        my_visits = planned_df[
-            planned_df["EmployeeCode"].astype(str)==str(employee_code)
-        ]
-
-        st.dataframe(my_visits,use_container_width=True)
+                    next_id = f"S{len(st.session_state.gst_df)+1:05d}"
+                    new_store = pd.DataFrame([{
+                        "StoreID": next_id, 
+                        "StoreName": store_name, 
+                        "GSTNumber": gst_no,
+                        "City": city, 
+                        "EmployeeCode": emp_code
+                    }])
+                    st.session_state.gst_df = pd.concat([st.session_state.gst_df, new_store], ignore_index=True)
+                    st.session_state.gst_df.to_excel(GST_FILE, index=False)
+                    st.success("✅ Store Added Successfully!")
