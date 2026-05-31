@@ -13,7 +13,36 @@ import os
 import re
 from datetime import date
 
-st.set_page_config(page_title="Beat Plan Management", layout="wide")
+st.set_page_config(
+    page_title="Beat Plan Management",
+    page_icon="🚀",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
+st.markdown("""
+<style>
+.stApp {background: linear-gradient(to right,#eef2ff,#f8fafc);}
+[data-testid="stSidebar"] {background: linear-gradient(180deg,#1e3a8a,#312e81);}
+[data-testid="stSidebar"] * {color:white !important;}
+.stButton>button{
+background:linear-gradient(90deg,#2563eb,#7c3aed);
+color:white;border:none;border-radius:12px;font-weight:bold;
+}
+.banner{
+padding:25px;border-radius:18px;
+background:linear-gradient(90deg,#2563eb,#7c3aed);
+color:white;text-align:center;margin-bottom:20px;
+}
+.metric-card{
+background:white;padding:25px;border-radius:18px;
+box-shadow:0 4px 18px rgba(0,0,0,.1);text-align:center;
+}
+.metric-value{font-size:38px;font-weight:bold;color:#2563eb;}
+.metric-label{font-size:16px;color:#64748b;}
+</style>
+""", unsafe_allow_html=True)
+
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -52,7 +81,7 @@ def validate_gst(gst):
 
 if not st.session_state.logged_in:
 
-    st.title("Beat Plan Management System")
+    st.markdown("""<div class="banner"><h1>🚀 Beat Plan Management System</h1><p>Employee Visit Planning & Store Management</p></div>""", unsafe_allow_html=True)
 
     login_type = st.radio("Login Type",["Admin","Employee"])
 
@@ -123,9 +152,13 @@ if st.session_state.role=="admin":
     if menu=="Dashboard":
 
         st.title("Admin Dashboard")
-        st.metric("Total Employees", len(employee_df))
-        st.metric("Total Stores", len(gst_df))
-        st.metric("Total Visits", len(planned_df))
+        col1,col2,col3=st.columns(3)
+        with col1:
+            st.markdown(f'<div class="metric-card"><div class="metric-value">{len(employee_df)}</div><div class="metric-label">👨 Employees</div></div>',unsafe_allow_html=True)
+        with col2:
+            st.markdown(f'<div class="metric-card"><div class="metric-value">{len(gst_df)}</div><div class="metric-label">🏪 Stores</div></div>',unsafe_allow_html=True)
+        with col3:
+            st.markdown(f'<div class="metric-card"><div class="metric-value">{len(planned_df)}</div><div class="metric-label">📅 Visits</div></div>',unsafe_allow_html=True)
 
     elif menu=="Upload Employee Master":
 
