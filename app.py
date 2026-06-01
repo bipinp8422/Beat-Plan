@@ -3,6 +3,11 @@ import pandas as pd
 import os
 from datetime import date, timedelta
 import plotly.express as px
+import re
+def is_valid_gstin(gstin):
+    gstin = str(gstin).strip().upper()
+    pattern = r'^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$'
+    return bool(re.match(pattern, gstin))
 
 st.set_page_config(page_title="Beat Plan Pro", page_icon="🚀", layout="wide")
 
@@ -32,7 +37,7 @@ ADMIN_FILE = os.path.join(BASE_DIR, "Admin_Master.xlsx")
 for file, cols in [
     (EMPLOYEE_FILE, ["EmployeeCode","EmployeeName","Password"]),
     (GST_FILE, ["StoreID","StoreName","GSTNumber","City","EmployeeCode"]),
-    (PLANNED_FILE, ["EmployeeCode","EmployeeName","City","Store","StoreID","VisitDate"]),
+    (PLANNED_FILE, ["EmployeeCode","EmployeeName","City","Store","GSTNumber","StoreID","VisitDate"]),
     (ADMIN_FILE, ["Username","Password"])
 ]:
     if not os.path.exists(file):
@@ -182,8 +187,11 @@ else:
         if available_stores.empty:
             st.success("✅ All stores already planned for this date.")
         else:
-            st.dataframe(available_stores[["StoreID", "StoreName", "GSTNumber"]], use_container_width=True)
-
+            st.dataframe(
+    available_stores[["StoreID", "StoreName", "City", "GSTNumber"]],
+    hide_index=True,
+    use_container_width=True
+)
             selected_store = st.selectbox("Select Store", available_stores["Display"])
 
             if st.button("✅ Save Visit Plan", type="primary", use_container_width=True):
@@ -195,9 +203,9 @@ else:
                     "City": city,
                     "Store": row["StoreName"],
                     "StoreID": row["StoreID"],
+                    "GSTNumber": row["GSTNumber"],
                     "VisitDate": pd.to_datetime(visit_date)
                 }])
-
                 st.session_state.planned_df = pd.concat([st.session_state.planned_df, new_plan], ignore_index=True)
                 st.session_state.planned_df.to_excel(PLANNED_FILE, index=False)
 
@@ -226,23 +234,50 @@ else:
 
     elif menu == "Add New Store":
         st.title("➕ Add New Store")
-        gst_no = st.text_input("GST Number").upper().strip()
-        city = st.text_input("City").upper()
-        store_name = st.text_input("Store Name").upper()
 
-        if st.button("Save Store", use_container_width=True):
-            if gst_no and city and store_name:
-                if st.session_state.gst_df["GSTNumber"].astype(str).str.upper().eq(gst_no).any():
-                    st.error("GST already exists!")
-                else:
-                    next_id = f"S{len(st.session_state.gst_df)+1:05d}"
-                    new_store = pd.DataFrame([{
-                        "StoreID": next_id, 
-                        "StoreName": store_name, 
-                        "GSTNumber": gst_no,
-                        "City": city, 
-                        "EmployeeCode": emp_code
-                    }])
-                    st.session_state.gst_df = pd.concat([st.session_state.gst_df, new_store], ignore_index=True)
-                    st.session_state.gst_df.to_excel(GST_FILE, index=False)
-                    st.success("✅ Store Added Successfully!")
+    gst_no = st.text_input(
+        "GST Number",
+        max_chars=15,
+        help="Enter valid 15-digit GSTIN"
+    ).upper().strip()
+
+    city = st.text_input("City").upper().strip()
+    store_name = st.text_input("Store Name").upper().strip()
+
+    if st.button("Save Store", use_container_width=True):
+
+        if not gst_no:
+            st.error("Please enter GST Number")
+
+        elif not is_valid_gstin(gst_no):
+            st.error("❌ Invalid GST Number Format! Example: 27ABCDE1234F1Z5")
+
+        elif not city:
+            st.error("Please enter City")
+
+        elif not store_name:
+            st.error("Please enter Store Name")
+
+        elif st.session_state.gst_df["GSTNumber"].astype(str).str.upper().eq(gst_no).any():
+            st.error("GST Number already exists!")
+
+        else:
+            next_id = f"S{len(st.session_state.gst_df)+1:05d}"
+
+            new_store = pd.DataFrame([{
+                "StoreID": next_id,
+                "StoreName": store_name,
+                "GSTNumber": gst_no,
+                "City": city,
+                "EmployeeCode": emp_code
+            }])
+
+            st.session_state.gst_df = pd.concat(
+                [st.session_state.gst_df, new_store],
+                ignore_index=True
+            )
+
+            st.session_state.gst_df.to_excel(GST_FILE, index=False)
+
+            st.success("✅ Store Added Successfully!")
+            st.rerun()
