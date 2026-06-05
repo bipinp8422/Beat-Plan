@@ -4,51 +4,58 @@ import os
 from datetime import date
 import re
 
-st.set_page_config(page_title="Beat Plan Pro", page_icon="🚀", layout="wide")
+# ====================== PAGE CONFIG ======================
+st.set_page_config(
+    page_title="Beat Plan Pro",
+    page_icon="🚀",
+    layout="wide",
+    initial_sidebar_state="collapsed"
+)
 
-# ====================== STYLING ======================
+# ====================== MOBILE-FRIENDLY STYLING ======================
 st.markdown("""
 <style>
     .stApp {
         background: linear-gradient(135deg, #f0f4f8 0%, #e0e7ff 100%);
     }
     .main-header {
-        font-size: 58px;
+        font-size: 42px;
         font-weight: 800;
         background: linear-gradient(90deg, #1e3a8a, #6366f1, #a855f7);
         -webkit-background-clip: text;
         -webkit-text-fill-color: transparent;
         text-align: center;
-        margin-bottom: 10px;
+        margin-bottom: 8px;
     }
+    @media (min-width: 768px) {
+        .main-header { font-size: 58px; }
+    }
+
     .sub-header {
         text-align: center;
         color: #475569;
-        font-size: 20px;
-        margin-bottom: 30px;
+        font-size: 18px;
+        margin-bottom: 25px;
     }
+
     .store-card {
         background: white;
         padding: 20px;
-        border-radius: 18px;
-        box-shadow: 0 10px 30px rgba(0,0,0,0.1);
+        border-radius: 16px;
+        box-shadow: 0 8px 25px rgba(0,0,0,0.1);
         text-align: center;
-        transition: all 0.3s ease;
-        height: 100%;
+        margin-bottom: 16px;
         border: 1px solid #e2e8f0;
     }
-    .store-card:hover {
-        transform: translateY(-10px);
-        box-shadow: 0 20px 40px rgba(99, 102, 241, 0.25);
-        border-color: #6366f1;
-    }
+
     .metric-card {
         background: white;
-        padding: 24px;
+        padding: 20px;
         border-radius: 16px;
         box-shadow: 0 8px 25px rgba(0,0,0,0.08);
         text-align: center;
     }
+
     .stButton>button {
         border-radius: 12px;
         height: 52px;
@@ -67,10 +74,10 @@ ADMIN_FILE = os.path.join(BASE_DIR, "Admin_Master.xlsx")
 
 # Initialize Files
 for file, cols in [
-    (EMPLOYEE_FILE, ["EmployeeCode","EmployeeName","Password"]),
-    (GST_FILE, ["StoreID","StoreName","GSTNumber","City","EmployeeCode"]),
-    (PLANNED_FILE, ["EmployeeCode","EmployeeName","City","Store","GSTNumber","StoreID","VisitDate"]),
-    (ADMIN_FILE, ["Username","Password"])
+    (EMPLOYEE_FILE, ["EmployeeCode", "EmployeeName", "Password"]),
+    (GST_FILE, ["StoreID", "StoreName", "GSTNumber", "City", "EmployeeCode"]),
+    (PLANNED_FILE, ["EmployeeCode", "EmployeeName", "City", "Store", "GSTNumber", "StoreID", "VisitDate"]),
+    (ADMIN_FILE, ["Username", "Password"])
 ]:
     if not os.path.exists(file):
         pd.DataFrame(columns=cols).to_excel(file, index=False)
@@ -135,7 +142,7 @@ if not st.session_state.logged_in:
                     st.error("❌ Invalid Credentials")
     st.stop()
 
-# Logout
+# ====================== LOGOUT ======================
 if st.sidebar.button("🚪 Logout", use_container_width=True):
     st.session_state.update({"logged_in": False, "role": "", "emp_code": "", "emp_name": ""})
     st.rerun()
@@ -152,11 +159,13 @@ if st.session_state.role == "admin":
         total_plans = len(st.session_state.planned_df)
         today_plans = len(st.session_state.planned_df[st.session_state.planned_df["VisitDate"].dt.date == date.today()])
 
-        c1, c2, c3, c4 = st.columns(4)
-        with c1: st.markdown(f'<div class="metric-card"><h2>{total_emp}</h2><p>Employees</p></div>', unsafe_allow_html=True)
-        with c2: st.markdown(f'<div class="metric-card"><h2>{total_stores}</h2><p>Stores</p></div>', unsafe_allow_html=True)
-        with c3: st.markdown(f'<div class="metric-card"><h2>{total_plans}</h2><p>Total Plans</p></div>', unsafe_allow_html=True)
-        with c4: st.markdown(f'<div class="metric-card"><h2>{today_plans}</h2><p>Today Visits</p></div>', unsafe_allow_html=True)
+        c1, c2 = st.columns(2)
+        with c1:
+            st.metric("👥 Employees", total_emp)
+            st.metric("📋 Total Plans", total_plans)
+        with c2:
+            st.metric("🏪 Stores", total_stores)
+            st.metric("📅 Today Visits", today_plans)
 
     elif menu == "👥 Employees":
         st.title("👥 All Employees")
@@ -205,39 +214,50 @@ else:
             st.warning("No stores assigned yet.")
             st.stop()
 
-        col1, col2 = st.columns([1, 1])
+        col1, col2 = st.columns(2)
         with col1:
             city = st.selectbox("📍 Select City", sorted(employee_stores["City"].dropna().unique()))
         with col2:
             visit_date = st.date_input("📅 Visit Date", value=date.today())
 
-        city_stores = employee_stores[employee_stores["City"] == city].copy()
-
-        planned_today = st.session_state.planned_df[
+        # === MAX 10 STORES PER DAY CHECK ===
+        daily_plans = st.session_state.planned_df[
             (st.session_state.planned_df["EmployeeCode"].astype(str) == str(emp_code)) &
             (st.session_state.planned_df["VisitDate"].dt.date == visit_date)
-        ]["StoreID"].tolist()
+        ]
+        planned_count = len(daily_plans)
 
-        available = city_stores[~city_stores["StoreID"].isin(planned_today)]
+        st.info(f"📊 **{planned_count}/10** stores planned for {visit_date}")
+
+        if planned_count >= 10:
+            st.error("🚫 You have reached the **maximum limit of 10 stores per day**.")
+            st.stop()
+
+        city_stores = employee_stores[employee_stores["City"] == city].copy()
+
+        planned_today_ids = daily_plans["StoreID"].tolist()
+
+        available = city_stores[~city_stores["StoreID"].isin(planned_today_ids)]
 
         st.subheader(f"🛍️ Available Stores in {city} ({len(available)})")
 
         if available.empty:
             st.success("✅ All stores already planned for this date!")
         else:
-            cols = st.columns(3)
             for idx, row in available.iterrows():
-                with cols[idx % 3]:
-                    st.markdown(f"""
-                    <div class="store-card">
-                        <h3>{row['StoreName']}</h3>
-                        <p><b>Store ID:</b> {row['StoreID']}</p>
-                        <p><b>City:</b> {row['City']}</p>
-                        <small>GST: {row['GSTNumber']}</small>
-                    </div>
-                    """, unsafe_allow_html=True)
-                    
-                    if st.button("✅ Plan This Visit", key=f"btn_{idx}"):
+                st.markdown(f"""
+                <div class="store-card">
+                    <h4>{row['StoreName']}</h4>
+                    <p><b>Store ID:</b> {row['StoreID']}</p>
+                    <p><b>City:</b> {row['City']}</p>
+                    <small>GST: {row['GSTNumber']}</small>
+                </div>
+                """, unsafe_allow_html=True)
+                
+                if st.button("✅ Plan This Visit", key=f"btn_{idx}", use_container_width=True):
+                    if planned_count >= 10:
+                        st.error("🚫 Maximum 10 stores per day reached!")
+                    else:
                         new_plan = pd.DataFrame([{
                             "EmployeeCode": emp_code,
                             "EmployeeName": emp_name,
@@ -281,7 +301,7 @@ else:
             with col2:
                 store_name = st.text_input("Store Name").title().strip()
             
-            if st.form_submit_button("💾 Save Store", type="primary"):
+            if st.form_submit_button("💾 Save Store", type="primary", use_container_width=True):
                 if not gst_no or not is_valid_gstin(gst_no):
                     st.error("❌ Invalid GST Number!")
                 elif not city or not store_name:
