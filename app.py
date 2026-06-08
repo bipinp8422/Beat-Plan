@@ -45,11 +45,6 @@ st.markdown("""
         background: linear-gradient(90deg, #0066cc, #00a8e8) !important;
         color: white !important;
     }
-    .github-btn {
-        background: linear-gradient(90deg, #238636, #2ea44f) !important;
-        color: white !important;
-        font-weight: bold;
-    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -127,22 +122,23 @@ def get_progress_color(current, max_val):
     elif percent >= 80: return "#f59e0b"
     else: return "#10b981"
 
-# ====================== DOWNLOAD FOR GITHUB ======================
-def github_download_button():
-    if not st.session_state.planned_df.empty:
+def download_beat_plan_button(df, key, filename_prefix="Beat_Plan"):
+    """Reusable download button for Beat Plan Excel export"""
+    if not df.empty:
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
-            st.session_state.planned_df.to_excel(writer, index=False)
+            df.to_excel(writer, index=False)
         output.seek(0)
         st.download_button(
-            label="📤 DOWNLOAD & UPDATE GITHUB",
+            label="📥 Download Beat Plan (Excel)",
             data=output.getvalue(),
-            file_name="Planned_Visits.xlsx",
+            file_name=f"{filename_prefix}_{date.today().strftime('%Y-%m-%d')}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             use_container_width=True,
-            key="github_btn"
+            key=key
         )
-        st.caption("→ Go to https://github.com/bipinp8422/Beat-Plan → Replace Planned_Visits.xlsx → Commit")
+    else:
+        st.info("No plans to download for the selected filters.")
 
 # ====================== LOAD DATA ======================
 if "employee_df" not in st.session_state:
@@ -235,7 +231,6 @@ if st.session_state.role == "admin":
                         <div class='metric-value'>{value}</div>
                     </div>
                 """, unsafe_allow_html=True)
-        github_download_button()
 
     elif admin_menu == "👥 Manage Employees":
         tab1, tab2 = st.tabs(["View Employees", "Add New Employee"])
@@ -295,9 +290,9 @@ if st.session_state.role == "admin":
                         st.success("✅ Store added!")
                         st.rerun()
 
+    # ====================== VIEW PLANS (UPDATED) ======================
     elif admin_menu == "📋 View Plans":
         st.subheader("All Visit Plans")
-        github_download_button()
         col1, col2, col3 = st.columns(3)
         with col1:
             filter_emp = st.selectbox("Filter by Employee", ["All"] + list(st.session_state.planned_df["EmployeeName"].dropna().unique()))
@@ -316,6 +311,14 @@ if st.session_state.role == "admin":
             filtered_plans = filtered_plans[(filtered_plans["VisitDate"] >= start) & (filtered_plans["VisitDate"] <= end)]
 
         st.dataframe(filtered_plans.sort_values("VisitDate", ascending=False), use_container_width=True, hide_index=True)
+
+        # ── Download Button ──────────────────────────────────────────
+        st.markdown("---")
+        download_beat_plan_button(
+            df=filtered_plans.sort_values("VisitDate", ascending=False),
+            key="admin_beat_plan_download",
+            filename_prefix="Beat_Plan_Admin"
+        )
 
     elif admin_menu == "📤 Upload Masters":
         col1, col2, col3 = st.columns(3)
@@ -442,7 +445,16 @@ else:
                             st.success(f"✅ {row['StoreName']} added!")
                             st.rerun()
 
-        github_download_button()
+        # ── Download Button ──────────────────────────────────────────
+        st.markdown("---")
+        emp_plans = st.session_state.planned_df[
+            st.session_state.planned_df["EmployeeCode"].astype(str) == str(emp_code)
+        ]
+        download_beat_plan_button(
+            df=emp_plans,
+            key="beat_plan_download",
+            filename_prefix="Beat_Plan"
+        )
 
     elif emp_menu == "📅 My Plans":
         my_plans = st.session_state.planned_df[st.session_state.planned_df["EmployeeCode"].astype(str) == str(emp_code)]
@@ -514,6 +526,4 @@ else:
                     st.success(f"✅ Store '{sname}' added successfully!")
                     st.rerun()
 
-    github_download_button()
-
-st.caption("Beat Plan Pro © 2026 | Data saved in SQLite • Download & update GitHub after changes")
+st.caption("Beat Plan Pro © 2026 | Data saved in SQLite")
