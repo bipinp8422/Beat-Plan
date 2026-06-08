@@ -69,20 +69,20 @@ def load_or_create_df(file_path, columns):
     df.to_excel(file_path, index=False)
     return df
 
-def save_planned_df():
+def save_df(df, file_path, name="data"):
     try:
-        st.session_state.planned_df.to_excel(PLANNED_FILE, index=False)
+        df.to_excel(file_path, index=False)
+        st.success(f"✅ {name} saved successfully to disk!")
         return True
     except Exception as e:
-        st.error(f"❌ Save failed: {e}")
+        st.error(f"❌ Failed to save {name}: {e}")
         return False
 
+def save_planned_df():
+    return save_df(st.session_state.planned_df, PLANNED_FILE, "Planned Visits")
+
 def save_gst_df():
-    try:
-        st.session_state.gst_df.to_excel(GST_FILE, index=False)
-        return True
-    except Exception:
-        return False
+    return save_df(st.session_state.gst_df, GST_FILE, "Store Master")
 
 def is_valid_gstin(gstin):
     gstin = str(gstin).strip().upper()
@@ -110,7 +110,8 @@ st.session_state.planned_df["VisitDate"] = pd.to_datetime(
 ).dt.date
 
 # ====================== SESSION STATE ======================
-for k, v in {"logged_in": False, "role": "", "emp_code": "", "emp_name": "", "selected_cities": []}.items():
+defaults = {"logged_in": False, "role": "", "emp_code": "", "emp_name": "", "selected_cities": []}
+for k, v in defaults.items():
     if k not in st.session_state:
         st.session_state[k] = v
 
@@ -163,6 +164,21 @@ with col3:
         st.session_state.update({"logged_in": False, "role": "", "emp_code": "", "emp_name": "", "selected_cities": []})
         st.rerun()
 
+# ====================== DOWNLOAD BUTTON ======================
+def download_planned_button():
+    if not st.session_state.planned_df.empty:
+        output = io.BytesIO()
+        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+            st.session_state.planned_df.to_excel(writer, index=False)
+        output.seek(0)
+        st.download_button(
+            "📥 Download Planned_Visits.xlsx",
+            output.getvalue(),
+            f"Planned_Visits_{date.today()}.xlsx",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key="download_planned"
+        )
+
 # ====================== ADMIN PANEL ======================
 if st.session_state.role == "admin":
     st.markdown("<h1 class='main-header'>🛠️ Admin Dashboard</h1>", unsafe_allow_html=True)
@@ -179,9 +195,10 @@ if st.session_state.role == "admin":
         today_plans = len([d for d in st.session_state.planned_df["VisitDate"] if d == date.today()])
 
         col1, col2, col3, col4 = st.columns(4)
-        for col, icon, label, value in zip([col1,col2,col3,col4], ["👥","🏪","📋","📅"], 
-                                          ["Total Employees","Total Stores","Total Plans","Today's Visits"], 
-                                          [total_emp, total_stores, total_plans, today_plans]):
+        metrics = zip([col1,col2,col3,col4], ["👥","🏪","📋","📅"], 
+                      ["Total Employees","Total Stores","Total Plans","Today's Visits"], 
+                      [total_emp, total_stores, total_plans, today_plans])
+        for col, icon, label, value in metrics:
             with col:
                 st.markdown(f"""
                     <div class='metric-card'>
@@ -190,6 +207,7 @@ if st.session_state.role == "admin":
                         <div class='metric-value'>{value}</div>
                     </div>
                 """, unsafe_allow_html=True)
+        download_planned_button()
 
         col1, col2 = st.columns(2)
         with col1:
@@ -239,7 +257,9 @@ if st.session_state.role == "admin":
                     gst_no = st.text_input("GST Number", max_chars=15).upper().strip()
                 with col2:
                     city = st.text_input("City")
-                    emp_code_sel = st.selectbox("Assign Employee", st.session_state.employee_df["EmployeeCode"].unique() if not st.session_state.employee_df.empty else ["No Employees"])
+                    emp_code_sel = st.selectbox("Assign Employee", 
+                                              st.session_state.employee_df["EmployeeCode"].unique() 
+                                              if not st.session_state.employee_df.empty else ["No Employees"])
                 if st.form_submit_button("➕ Add Store", type="primary"):
                     if not store_name or not gst_no or not city:
                         st.error("All fields required!")
@@ -257,12 +277,12 @@ if st.session_state.role == "admin":
                             "EmployeeCode": emp_code_sel
                         }])
                         st.session_state.gst_df = pd.concat([st.session_state.gst_df, new_store], ignore_index=True)
-                        st.session_state.gst_df.to_excel(GST_FILE, index=False)
-                        st.success("✅ Store added!")
+                        save_gst_df()
                         st.rerun()
 
     elif admin_menu == "📋 View Plans":
         st.subheader("All Visit Plans")
+        download_planned_button()
         col1, col2, col3 = st.columns(3)
         with col1:
             filter_emp = st.selectbox("Filter by Employee", ["All"] + list(st.session_state.planned_df["EmployeeName"].dropna().unique()))
@@ -280,39 +300,37 @@ if st.session_state.role == "admin":
             start, end = date_range
             filtered_plans = filtered_plans[(filtered_plans["VisitDate"] >= start) & (filtered_plans["VisitDate"] <= end)]
 
-        if not filtered_plans.empty:
-            col_exp1, col_exp2 = st.columns(2)
-            with col_exp1:
-                csv = filtered_plans.to_csv(index=False).encode('utf-8')
-                st.download_button("📥 Export CSV", csv, f"Beat_Plans_{date.today()}.csv", "text/csv")
-            with col_exp2:
-                output = io.BytesIO()
-                with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                    filtered_plans.to_excel(writer, index=False)
-                output.seek(0)
-                st.download_button("📥 Export Excel", output.getvalue(), f"Beat_Plans_{date.today()}.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-
         st.dataframe(filtered_plans.sort_values("VisitDate", ascending=False), use_container_width=True, hide_index=True)
 
     elif admin_menu == "📤 Upload Masters":
-        col1, col2 = st.columns(2)
+        col1, col2, col3 = st.columns(3)
         with col1:
-            st.subheader("👥 Employee Master")
+            st.subheader("Employee Master")
             uploaded = st.file_uploader("Upload Employee Excel", type="xlsx", key="emp_up")
             if uploaded and st.button("Upload Employees"):
                 df = pd.read_excel(uploaded)
                 df.to_excel(EMPLOYEE_FILE, index=False)
                 st.session_state.employee_df = df
-                st.success("Employee master updated!")
+                st.success("✅ Employee master updated!")
                 st.rerun()
         with col2:
-            st.subheader("🏪 Store Master")
+            st.subheader("Store Master")
             uploaded = st.file_uploader("Upload Store Excel", type="xlsx", key="store_up")
             if uploaded and st.button("Upload Stores"):
                 df = pd.read_excel(uploaded)
                 df.to_excel(GST_FILE, index=False)
                 st.session_state.gst_df = df
-                st.success("Store master updated!")
+                st.success("✅ Store master updated!")
+                st.rerun()
+        with col3:
+            st.subheader("Planned Visits")
+            uploaded = st.file_uploader("Upload Planned Visits Excel", type="xlsx", key="planned_up")
+            if uploaded and st.button("Upload Planned Visits"):
+                df = pd.read_excel(uploaded)
+                df["VisitDate"] = pd.to_datetime(df["VisitDate"], errors="coerce").dt.date
+                df.to_excel(PLANNED_FILE, index=False)
+                st.session_state.planned_df = df
+                st.success("✅ Planned Visits updated!")
                 st.rerun()
 
 # ====================== EMPLOYEE PANEL ======================
@@ -406,7 +424,6 @@ else:
                             }])
                             st.session_state.planned_df = pd.concat([st.session_state.planned_df, new_plan], ignore_index=True)
                             save_planned_df()
-                            st.success(f"✅ {row['StoreName']} added!")
                             st.rerun()
 
     elif emp_menu == "📅 My Plans":
@@ -476,7 +493,9 @@ else:
                     }])
                     st.session_state.gst_df = pd.concat([st.session_state.gst_df, new_store], ignore_index=True)
                     save_gst_df()
-                    st.success(f"✅ Store '{sname}' added successfully and assigned to you!")
+                    st.success(f"✅ Store '{sname}' added successfully!")
                     st.rerun()
 
-st.caption("Beat Plan Pro © 2026 | New stores are added automatically")
+    download_planned_button()
+
+st.caption("Beat Plan Pro © 2026")
