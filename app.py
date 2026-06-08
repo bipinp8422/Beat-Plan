@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import os
+import sqlite3
 from datetime import date, timedelta
 import re
 import plotly.express as px
@@ -44,15 +45,61 @@ st.markdown("""
         background: linear-gradient(90deg, #0066cc, #00a8e8) !important;
         color: white !important;
     }
+    .github-btn {
+        background: linear-gradient(90deg, #238636, #2ea44f) !important;
+        color: white !important;
+        font-weight: bold;
+    }
 </style>
 """, unsafe_allow_html=True)
 
 # ====================== FILE PATHS ======================
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DB_FILE = os.path.join(BASE_DIR, "beatplan.db")
 EMPLOYEE_FILE = os.path.join(BASE_DIR, "Employee_Master.xlsx")
 GST_FILE = os.path.join(BASE_DIR, "GST_Master.xlsx")
-PLANNED_FILE = os.path.join(BASE_DIR, "Planned_Visits.xlsx")
 ADMIN_FILE = os.path.join(BASE_DIR, "Admin_Master.xlsx")
+
+# ====================== SQLITE SETUP ======================
+def init_db():
+    conn = sqlite3.connect(DB_FILE)
+    conn.execute('''CREATE TABLE IF NOT EXISTS planned_visits (
+                    id INTEGER PRIMARY KEY,
+                    EmployeeCode TEXT,
+                    EmployeeName TEXT,
+                    City TEXT,
+                    Store TEXT,
+                    GSTNumber TEXT,
+                    StoreID TEXT,
+                    VisitDate TEXT)''')
+    conn.commit()
+    conn.close()
+
+def load_planned_df():
+    conn = sqlite3.connect(DB_FILE)
+    df = pd.read_sql_query("SELECT * FROM planned_visits", conn)
+    conn.close()
+    if not df.empty:
+        df["VisitDate"] = pd.to_datetime(df["VisitDate"]).dt.date
+    else:
+        df = pd.DataFrame(columns=["EmployeeCode", "EmployeeName", "City", "Store", "GSTNumber", "StoreID", "VisitDate"])
+    return df
+
+def save_planned_df():
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        df_copy = st.session_state.planned_df.copy()
+        df_copy["VisitDate"] = df_copy["VisitDate"].astype(str)
+        df_copy.to_sql('planned_visits', conn, if_exists='replace', index=False)
+        conn.commit()
+        conn.close()
+        st.success("✅ Saved to persistent database (survives restart)!")
+        return True
+    except Exception as e:
+        st.error(f"❌ Save failed: {e}")
+        return False
+
+init_db()
 
 # ====================== HELPER FUNCTIONS ======================
 def load_or_create_df(file_path, columns):
@@ -69,21 +116,6 @@ def load_or_create_df(file_path, columns):
     df.to_excel(file_path, index=False)
     return df
 
-def save_df(df, file_path, name="data"):
-    try:
-        df.to_excel(file_path, index=False)
-        st.success(f"✅ {name} saved successfully!")
-        return True
-    except Exception as e:
-        st.error(f"❌ Failed to save {name}: {e}")
-        return False
-
-def save_planned_df():
-    return save_df(st.session_state.planned_df, PLANNED_FILE, "Planned Visits")
-
-def save_gst_df():
-    return save_df(st.session_state.gst_df, GST_FILE, "Store Master")
-
 def is_valid_gstin(gstin):
     gstin = str(gstin).strip().upper()
     pattern = r'^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$'
@@ -95,19 +127,32 @@ def get_progress_color(current, max_val):
     elif percent >= 80: return "#f59e0b"
     else: return "#10b981"
 
+# ====================== DOWNLOAD FOR GITHUB ======================
+def github_download_button():
+    if not st.session_state.planned_df.empty:
+        output = io.BytesIO()
+        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+            st.session_state.planned_df.to_excel(writer, index=False)
+        output.seek(0)
+        st.download_button(
+            label="📤 DOWNLOAD & UPDATE GITHUB",
+            data=output.getvalue(),
+            file_name="Planned_Visits.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True,
+            key="github_btn"
+        )
+        st.caption("→ Go to https://github.com/bipinp8422/Beat-Plan → Replace Planned_Visits.xlsx → Commit")
+
 # ====================== LOAD DATA ======================
 if "employee_df" not in st.session_state:
     st.session_state.employee_df = load_or_create_df(EMPLOYEE_FILE, ["EmployeeCode", "EmployeeName", "Password"])
 if "gst_df" not in st.session_state:
     st.session_state.gst_df = load_or_create_df(GST_FILE, ["StoreID", "StoreName", "GSTNumber", "City", "EmployeeCode"])
 if "planned_df" not in st.session_state:
-    st.session_state.planned_df = load_or_create_df(PLANNED_FILE, ["EmployeeCode", "EmployeeName", "City", "Store", "GSTNumber", "StoreID", "VisitDate"])
+    st.session_state.planned_df = load_planned_df()
 if "admin_df" not in st.session_state:
     st.session_state.admin_df = load_or_create_df(ADMIN_FILE, ["Username", "Password"])
-
-st.session_state.planned_df["VisitDate"] = pd.to_datetime(
-    st.session_state.planned_df["VisitDate"], errors="coerce"
-).dt.date
 
 # ====================== SESSION STATE ======================
 for k, v in {"logged_in": False, "role": "", "emp_code": "", "emp_name": "", "selected_cities": []}.items():
@@ -163,20 +208,6 @@ with col3:
         st.session_state.update({"logged_in": False, "role": "", "emp_code": "", "emp_name": "", "selected_cities": []})
         st.rerun()
 
-# ====================== DOWNLOAD BUTTON ======================
-def download_planned_button():
-    if not st.session_state.planned_df.empty:
-        output = io.BytesIO()
-        with pd.ExcelWriter(output, engine='openpyxl') as writer:
-            st.session_state.planned_df.to_excel(writer, index=False)
-        output.seek(0)
-        st.download_button(
-            "📥 Download Planned_Visits.xlsx",
-            output.getvalue(),
-            f"Planned_Visits_{date.today()}.xlsx",
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
-
 # ====================== ADMIN PANEL ======================
 if st.session_state.role == "admin":
     st.markdown("<h1 class='main-header'>🛠️ Admin Dashboard</h1>", unsafe_allow_html=True)
@@ -204,7 +235,7 @@ if st.session_state.role == "admin":
                         <div class='metric-value'>{value}</div>
                     </div>
                 """, unsafe_allow_html=True)
-        download_planned_button()
+        github_download_button()
 
     elif admin_menu == "👥 Manage Employees":
         tab1, tab2 = st.tabs(["View Employees", "Add New Employee"])
@@ -242,9 +273,7 @@ if st.session_state.role == "admin":
                     gst_no = st.text_input("GST Number", max_chars=15).upper().strip()
                 with col2:
                     city = st.text_input("City")
-                    emp_code_sel = st.selectbox("Assign Employee", 
-                                              st.session_state.employee_df["EmployeeCode"].unique() 
-                                              if not st.session_state.employee_df.empty else ["No Employees"])
+                    emp_code_sel = st.selectbox("Assign Employee", st.session_state.employee_df["EmployeeCode"].unique() if not st.session_state.employee_df.empty else ["No Employees"])
                 if st.form_submit_button("➕ Add Store", type="primary"):
                     if not store_name or not gst_no or not city:
                         st.error("All fields required!")
@@ -262,13 +291,13 @@ if st.session_state.role == "admin":
                             "EmployeeCode": emp_code_sel
                         }])
                         st.session_state.gst_df = pd.concat([st.session_state.gst_df, new_store], ignore_index=True)
-                        save_gst_df()
+                        st.session_state.gst_df.to_excel(GST_FILE, index=False)
                         st.success("✅ Store added!")
                         st.rerun()
 
     elif admin_menu == "📋 View Plans":
         st.subheader("All Visit Plans")
-        download_planned_button()
+        github_download_button()
         col1, col2, col3 = st.columns(3)
         with col1:
             filter_emp = st.selectbox("Filter by Employee", ["All"] + list(st.session_state.planned_df["EmployeeName"].dropna().unique()))
@@ -314,8 +343,8 @@ if st.session_state.role == "admin":
             if uploaded and st.button("Upload Planned Visits"):
                 df = pd.read_excel(uploaded)
                 df["VisitDate"] = pd.to_datetime(df["VisitDate"], errors="coerce").dt.date
-                df.to_excel(PLANNED_FILE, index=False)
                 st.session_state.planned_df = df
+                save_planned_df()
                 st.success("✅ Planned Visits updated!")
                 st.rerun()
 
@@ -413,6 +442,8 @@ else:
                             st.success(f"✅ {row['StoreName']} added!")
                             st.rerun()
 
+        github_download_button()
+
     elif emp_menu == "📅 My Plans":
         my_plans = st.session_state.planned_df[st.session_state.planned_df["EmployeeCode"].astype(str) == str(emp_code)]
         if my_plans.empty:
@@ -479,10 +510,10 @@ else:
                         "EmployeeCode": emp_code
                     }])
                     st.session_state.gst_df = pd.concat([st.session_state.gst_df, new_store], ignore_index=True)
-                    save_gst_df()
+                    st.session_state.gst_df.to_excel(GST_FILE, index=False)
                     st.success(f"✅ Store '{sname}' added successfully!")
                     st.rerun()
 
-    download_planned_button()
+    github_download_button()
 
-st.caption("Beat Plan Pro © 2026 | Download file & commit to Git after changes")
+st.caption("Beat Plan Pro © 2026 | Data saved in SQLite • Download & update GitHub after changes")
