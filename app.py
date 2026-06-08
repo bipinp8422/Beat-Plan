@@ -54,32 +54,35 @@ GST_FILE = os.path.join(BASE_DIR, "GST_Master.xlsx")
 PLANNED_FILE = os.path.join(BASE_DIR, "Planned_Visits.xlsx")
 ADMIN_FILE = os.path.join(BASE_DIR, "Admin_Master.xlsx")
 
-# Initialize Files
-for file, cols in [
-    (EMPLOYEE_FILE, ["EmployeeCode", "EmployeeName", "Password"]),
-    (GST_FILE, ["StoreID", "StoreName", "GSTNumber", "City", "EmployeeCode"]),
-    (PLANNED_FILE, ["EmployeeCode", "EmployeeName", "City", "Store", "GSTNumber", "StoreID", "VisitDate"]),
-    (ADMIN_FILE, ["Username", "Password"])
-]:
-    if not os.path.exists(file):
-        pd.DataFrame(columns=cols).to_excel(file, index=False)
+# ====================== HELPER FUNCTIONS ======================
+def load_or_create_df(file_path, columns):
+    if os.path.exists(file_path) and os.path.getsize(file_path) > 100:
+        try:
+            df = pd.read_excel(file_path)
+            for col in columns:
+                if col not in df.columns:
+                    df[col] = None if col != "VisitDate" else pd.NaT
+            return df
+        except Exception:
+            pass
+    df = pd.DataFrame(columns=columns)
+    df.to_excel(file_path, index=False)
+    return df
 
-# Load Data
-if "employee_df" not in st.session_state:
-    st.session_state.employee_df = pd.read_excel(EMPLOYEE_FILE)
-if "gst_df" not in st.session_state:
-    st.session_state.gst_df = pd.read_excel(GST_FILE)
-if "planned_df" not in st.session_state:
-    st.session_state.planned_df = pd.read_excel(PLANNED_FILE)
-if "admin_df" not in st.session_state:
-    st.session_state.admin_df = pd.read_excel(ADMIN_FILE)
+def save_planned_df():
+    try:
+        st.session_state.planned_df.to_excel(PLANNED_FILE, index=False)
+        return True
+    except Exception as e:
+        st.error(f"❌ Save failed: {e}")
+        return False
 
-st.session_state.planned_df["VisitDate"] = pd.to_datetime(st.session_state.planned_df["VisitDate"], errors="coerce")
-
-# Session State
-for k, v in {"logged_in": False, "role": "", "emp_code": "", "emp_name": "", "selected_cities": []}.items():
-    if k not in st.session_state:
-        st.session_state[k] = v
+def save_gst_df():
+    try:
+        st.session_state.gst_df.to_excel(GST_FILE, index=False)
+        return True
+    except Exception:
+        return False
 
 def is_valid_gstin(gstin):
     gstin = str(gstin).strip().upper()
@@ -91,6 +94,25 @@ def get_progress_color(current, max_val):
     if percent >= 100: return "#ef4444"
     elif percent >= 80: return "#f59e0b"
     else: return "#10b981"
+
+# ====================== LOAD DATA ======================
+if "employee_df" not in st.session_state:
+    st.session_state.employee_df = load_or_create_df(EMPLOYEE_FILE, ["EmployeeCode", "EmployeeName", "Password"])
+if "gst_df" not in st.session_state:
+    st.session_state.gst_df = load_or_create_df(GST_FILE, ["StoreID", "StoreName", "GSTNumber", "City", "EmployeeCode"])
+if "planned_df" not in st.session_state:
+    st.session_state.planned_df = load_or_create_df(PLANNED_FILE, ["EmployeeCode", "EmployeeName", "City", "Store", "GSTNumber", "StoreID", "VisitDate"])
+if "admin_df" not in st.session_state:
+    st.session_state.admin_df = load_or_create_df(ADMIN_FILE, ["Username", "Password"])
+
+st.session_state.planned_df["VisitDate"] = pd.to_datetime(
+    st.session_state.planned_df["VisitDate"], errors="coerce"
+).dt.date
+
+# ====================== SESSION STATE ======================
+for k, v in {"logged_in": False, "role": "", "emp_code": "", "emp_name": "", "selected_cities": []}.items():
+    if k not in st.session_state:
+        st.session_state[k] = v
 
 # ====================== LOGIN ======================
 if not st.session_state.logged_in:
@@ -147,14 +169,14 @@ if st.session_state.role == "admin":
     
     admin_menu = st.sidebar.radio(
         "Navigation",
-        ["📊 Dashboard", "👥 Manage Employees", "🏪 Manage Stores", "📋 View Plans", "📤 Upload Masters", "⚙️ Settings"]
+        ["📊 Dashboard", "👥 Manage Employees", "🏪 Manage Stores", "📋 View Plans", "📤 Upload Masters"]
     )
 
     if admin_menu == "📊 Dashboard":
         total_emp = len(st.session_state.employee_df)
         total_stores = len(st.session_state.gst_df)
         total_plans = len(st.session_state.planned_df)
-        today_plans = len(st.session_state.planned_df[st.session_state.planned_df["VisitDate"].dt.date == date.today()])
+        today_plans = len([d for d in st.session_state.planned_df["VisitDate"] if d == date.today()])
 
         col1, col2, col3, col4 = st.columns(4)
         for col, icon, label, value in zip([col1,col2,col3,col4], ["👥","🏪","📋","📅"], 
@@ -164,7 +186,7 @@ if st.session_state.role == "admin":
                 st.markdown(f"""
                     <div class='metric-card'>
                         <div style='font-size:32px;'>{icon}</div>
-                        <div class='metric-label'>{label}</div>
+                        <div>{label}</div>
                         <div class='metric-value'>{value}</div>
                     </div>
                 """, unsafe_allow_html=True)
@@ -172,7 +194,8 @@ if st.session_state.role == "admin":
         col1, col2 = st.columns(2)
         with col1:
             st.subheader("📈 Plans by Employee")
-            st.bar_chart(st.session_state.planned_df.groupby("EmployeeName").size())
+            if not st.session_state.planned_df.empty:
+                st.bar_chart(st.session_state.planned_df.groupby("EmployeeName").size())
         with col2:
             st.subheader("🌍 Plans by City")
             plans_by_city = st.session_state.planned_df.groupby("City").size().reset_index(name="Plans")
@@ -216,7 +239,7 @@ if st.session_state.role == "admin":
                     gst_no = st.text_input("GST Number", max_chars=15).upper().strip()
                 with col2:
                     city = st.text_input("City")
-                    emp_code_sel = st.selectbox("Assign Employee", st.session_state.employee_df["EmployeeCode"].unique())
+                    emp_code_sel = st.selectbox("Assign Employee", st.session_state.employee_df["EmployeeCode"].unique() if not st.session_state.employee_df.empty else ["No Employees"])
                 if st.form_submit_button("➕ Add Store", type="primary"):
                     if not store_name or not gst_no or not city:
                         st.error("All fields required!")
@@ -226,7 +249,13 @@ if st.session_state.role == "admin":
                         st.error("GST already exists!")
                     else:
                         next_id = f"S{len(st.session_state.gst_df)+1:05d}"
-                        new_store = pd.DataFrame([{"StoreID": next_id, "StoreName": store_name.title(), "GSTNumber": gst_no, "City": city.title(), "EmployeeCode": emp_code_sel}])
+                        new_store = pd.DataFrame([{
+                            "StoreID": next_id, 
+                            "StoreName": store_name.title(), 
+                            "GSTNumber": gst_no, 
+                            "City": city.title(), 
+                            "EmployeeCode": emp_code_sel
+                        }])
                         st.session_state.gst_df = pd.concat([st.session_state.gst_df, new_store], ignore_index=True)
                         st.session_state.gst_df.to_excel(GST_FILE, index=False)
                         st.success("✅ Store added!")
@@ -234,7 +263,6 @@ if st.session_state.role == "admin":
 
     elif admin_menu == "📋 View Plans":
         st.subheader("All Visit Plans")
-
         col1, col2, col3 = st.columns(3)
         with col1:
             filter_emp = st.selectbox("Filter by Employee", ["All"] + list(st.session_state.planned_df["EmployeeName"].dropna().unique()))
@@ -250,9 +278,8 @@ if st.session_state.role == "admin":
             filtered_plans = filtered_plans[filtered_plans["City"] == filter_city]
         if len(date_range) == 2:
             start, end = date_range
-            filtered_plans = filtered_plans[(filtered_plans["VisitDate"].dt.date >= start) & (filtered_plans["VisitDate"].dt.date <= end)]
+            filtered_plans = filtered_plans[(filtered_plans["VisitDate"] >= start) & (filtered_plans["VisitDate"] <= end)]
 
-        # Export Buttons
         if not filtered_plans.empty:
             col_exp1, col_exp2 = st.columns(2)
             with col_exp1:
@@ -261,14 +288,9 @@ if st.session_state.role == "admin":
             with col_exp2:
                 output = io.BytesIO()
                 with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                    filtered_plans.to_excel(writer, index=False, sheet_name="Visit_Plans")
+                    filtered_plans.to_excel(writer, index=False)
                 output.seek(0)
-                st.download_button(
-                    "📥 Export Excel",
-                    output.getvalue(),
-                    f"Beat_Plans_{date.today()}.xlsx",
-                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                )
+                st.download_button("📥 Export Excel", output.getvalue(), f"Beat_Plans_{date.today()}.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
         st.dataframe(filtered_plans.sort_values("VisitDate", ascending=False), use_container_width=True, hide_index=True)
 
@@ -318,14 +340,16 @@ else:
         with col1:
             visit_date = st.date_input("📅 Select Date", value=date.today(), key="beat_date")
         with col2:
-            selected_cities = st.multiselect("🌍 Select Cities", sorted(employee_stores["City"].dropna().unique()), max_selections=3)
+            selected_cities = st.multiselect("🌍 Select Cities", 
+                                           sorted(employee_stores["City"].dropna().unique()), 
+                                           max_selections=3, key="city_multiselect")
         with col3:
             if st.button("🔍 Load Stores", use_container_width=True):
                 st.session_state.selected_cities = selected_cities
 
         daily_plans = st.session_state.planned_df[
             (st.session_state.planned_df["EmployeeCode"].astype(str) == str(emp_code)) &
-            (st.session_state.planned_df["VisitDate"].dt.date == visit_date)
+            (st.session_state.planned_df["VisitDate"] == visit_date)
         ]
         planned_count = len(daily_plans)
 
@@ -343,22 +367,17 @@ else:
         """, unsafe_allow_html=True)
 
         if planned_count >= 10:
-            st.error("🚫 Maximum 10 stores reached for today!")
+            st.error("🚫 Maximum 10 stores reached for this Day")
         else:
-            st.info(f"You can add {10 - planned_count} more stores today.")
+            st.info(f"You can add {10 - planned_count} more stores this Day.")
 
-        # Available Stores
-        if st.session_state.selected_cities:
-            city_stores = employee_stores[employee_stores["City"].isin(st.session_state.selected_cities)].copy()
-        else:
-            city_stores = employee_stores.copy()
-
+        city_stores = employee_stores[employee_stores["City"].isin(st.session_state.selected_cities)].copy() if st.session_state.selected_cities else employee_stores.copy()
         planned_ids = daily_plans["StoreID"].tolist()
         available = city_stores[~city_stores["StoreID"].isin(planned_ids)]
 
         st.markdown(f"### 🛍️ Available Stores ({len(available)})")
         if available.empty:
-            st.info("No more stores available for selected cities.")
+            st.info("No more stores available.")
         else:
             for idx, row in available.iterrows():
                 col1, col2 = st.columns([5, 1])
@@ -374,7 +393,7 @@ else:
                         </div>
                     """, unsafe_allow_html=True)
                 with col2:
-                    if st.button("➕ Add", key=f"add_{idx}"):
+                    if st.button("➕ Add", key=f"add_{idx}_{visit_date}"):
                         if planned_count < 10:
                             new_plan = pd.DataFrame([{
                                 "EmployeeCode": emp_code,
@@ -383,34 +402,34 @@ else:
                                 "Store": row["StoreName"],
                                 "StoreID": row["StoreID"],
                                 "GSTNumber": row["GSTNumber"],
-                                "VisitDate": pd.to_datetime(visit_date)
+                                "VisitDate": visit_date
                             }])
                             st.session_state.planned_df = pd.concat([st.session_state.planned_df, new_plan], ignore_index=True)
-                            st.session_state.planned_df.to_excel(PLANNED_FILE, index=False)
-                            st.success(f"✅ {row['StoreName']} added to plan!")
+                            save_planned_df()
+                            st.success(f"✅ {row['StoreName']} added!")
                             st.rerun()
 
     elif emp_menu == "📅 My Plans":
         my_plans = st.session_state.planned_df[st.session_state.planned_df["EmployeeCode"].astype(str) == str(emp_code)]
         if my_plans.empty:
-            st.info("No plans yet. Create one from New Beat Plan.")
+            st.info("No plans yet.")
         else:
             col1, col2, col3 = st.columns(3)
             with col1: st.metric("Total Plans", len(my_plans))
             with col2: st.metric("Cities", my_plans['City'].nunique())
-            with col3: st.metric("Dates", my_plans['VisitDate'].dt.date.nunique())
+            with col3: st.metric("Dates", len(my_plans['VisitDate'].unique()))
             st.dataframe(my_plans.sort_values("VisitDate", ascending=False), use_container_width=True, hide_index=True)
 
     elif emp_menu == "📆 Upcoming Plans":
         upcoming = st.session_state.planned_df[
             (st.session_state.planned_df["EmployeeCode"].astype(str) == str(emp_code)) &
-            (st.session_state.planned_df["VisitDate"].dt.date >= date.today())
+            (st.session_state.planned_df["VisitDate"] >= date.today())
         ].sort_values("VisitDate")
         if upcoming.empty:
             st.info("No upcoming visits.")
         else:
-            for vdate in upcoming["VisitDate"].dt.date.unique():
-                plans = upcoming[upcoming["VisitDate"].dt.date == vdate]
+            for vdate in sorted(upcoming["VisitDate"].unique()):
+                plans = upcoming[upcoming["VisitDate"] == vdate]
                 st.markdown(f"**📅 {vdate.strftime('%A, %d %B %Y')}** ({len(plans)} stores)")
                 for _, p in plans.iterrows():
                     st.markdown(f"• **{p['Store']}** - {p['City']}")
@@ -422,25 +441,42 @@ else:
         else:
             col1, col2 = st.columns(2)
             with col1:
-                st.bar_chart(my_plans.groupby("City").size().rename("Stores"))
+                st.bar_chart(my_plans.groupby("City").size())
             with col2:
-                my_plans["Month"] = my_plans["VisitDate"].dt.to_period("M").astype(str)
-                st.line_chart(my_plans.groupby("Month").size().rename("Visits"))
+                my_plans = my_plans.copy()
+                my_plans["Month"] = pd.to_datetime(my_plans["VisitDate"]).dt.to_period("M").astype(str)
+                st.line_chart(my_plans.groupby("Month").size())
 
     elif emp_menu == "➕ Request New Store":
-        st.subheader("Request New Store")
+        st.subheader("➕ Request & Add New Store")
         with st.form("store_request"):
             col1, col2 = st.columns(2)
             with col1:
-                sname = st.text_input("Store Name")
-                city = st.text_input("City")
+                sname = st.text_input("Store Name*")
+                city = st.text_input("City*")
             with col2:
-                gst = st.text_input("GST Number", max_chars=15).upper().strip()
-                reason = st.text_area("Reason", height=100)
-            if st.form_submit_button("Submit Request"):
-                if sname and city and gst and reason and is_valid_gstin(gst):
-                    st.success("✅ Request sent to Admin!")
+                gst = st.text_input("GST Number*", max_chars=15).upper().strip()
+                reason = st.text_area("Reason / Remarks", height=100)
+            
+            if st.form_submit_button("✅ Add Store Now", type="primary"):
+                if not sname or not city or not gst:
+                    st.error("Store Name, City and GST are required!")
+                elif not is_valid_gstin(gst):
+                    st.error("Invalid GST Number format!")
+                elif st.session_state.gst_df["GSTNumber"].astype(str).str.upper().eq(gst).any():
+                    st.error("This GST Number already exists!")
                 else:
-                    st.error("Please fill all fields correctly.")
+                    next_id = f"S{len(st.session_state.gst_df)+1:05d}"
+                    new_store = pd.DataFrame([{
+                        "StoreID": next_id,
+                        "StoreName": sname.title(),
+                        "GSTNumber": gst,
+                        "City": city.title(),
+                        "EmployeeCode": emp_code
+                    }])
+                    st.session_state.gst_df = pd.concat([st.session_state.gst_df, new_store], ignore_index=True)
+                    save_gst_df()
+                    st.success(f"✅ Store '{sname}' added successfully and assigned to you!")
+                    st.rerun()
 
-st.caption("Beat Plan Pro © 2026")
+st.caption("Beat Plan Pro © 2026 | New stores are added automatically")
