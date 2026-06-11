@@ -1,6 +1,6 @@
 streamlit
 pandas
 openpyxl
-xlsxwriter
-plotly.express
-supabase
+plotly
+sqlalchemy
+psycopg2-binary
