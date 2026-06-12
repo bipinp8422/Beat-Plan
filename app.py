@@ -63,15 +63,13 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ====================== COLUMN NAME NORMALIZER ======================
-# Supabase may return lowercase column names depending on how tables were created.
-# This maps any variant back to the PascalCase names used throughout the app.
 COLUMN_MAP = {
     "EmployeeCode": ["employeecode", "employee_code"],
     "EmployeeName": ["employeename", "employee_name"],
     "Password":     ["password"],
     "StoreID":      ["storeid", "store_id"],
     "StoreName":    ["storename", "store_name"],
-    "GSTNumber":    ["gstnumber", "gst_number", "gstnumber"],
+    "GSTNumber":    ["gstnumber", "gst_number"],
     "City":         ["city"],
     "Store":        ["store"],
     "VisitDate":    ["visitdate", "visit_date"],
@@ -124,7 +122,7 @@ def load_from_supabase(table_name, columns):
                 break
             all_rows.extend(response.data)
             if len(response.data) < batch_size:
-                break  # last page
+                break
             offset += batch_size
         if all_rows:
             df = pd.DataFrame(all_rows)
@@ -134,22 +132,55 @@ def load_from_supabase(table_name, columns):
         st.warning(f"⚠️ Error loading `{table_name}`: {e}")
         return pd.DataFrame(columns=columns)
 
+def sanitize_for_json(df):
+    """
+    Replace all NaN, inf, -inf values with None so records are
+    JSON-serialisable before sending to Supabase.
+    """
+    import math
+    df_copy = df.copy()
+    for col in df_copy.columns:
+        if pd.api.types.is_float_dtype(df_copy[col]):
+            df_copy[col] = df_copy[col].apply(
+                lambda x: None if (x is None or (isinstance(x, float) and (math.isnan(x) or math.isinf(x)))) else x
+            )
+        elif df_copy[col].dtype == object:
+            # Replace string "nan" / "None" that crept in via astype(str)
+            df_copy[col] = df_copy[col].apply(
+                lambda x: None if (x is None or (isinstance(x, str) and x.lower() in ("nan", "none", ""))) else x
+            )
+    # Catch-all using pandas
+    df_copy = df_copy.where(pd.notnull(df_copy), None)
+    return df_copy
+
 def save_to_supabase(table_name, df):
     try:
         df_copy = df.copy()
+
+        # Drop auto-generated id column if present
         if "id" in df_copy.columns:
             df_copy = df_copy.drop("id", axis=1)
+
+        # Format date columns
         for col in df_copy.columns:
             if col == "VisitDate" or pd.api.types.is_datetime64_any_dtype(df_copy[col]):
-                df_copy[col] = pd.to_datetime(df_copy[col]).dt.strftime("%Y-%m-%d")
+                df_copy[col] = pd.to_datetime(df_copy[col], errors="coerce").dt.strftime("%Y-%m-%d")
+
+        # ✅ Sanitize NaN / inf so JSON serialization never fails
+        df_copy = sanitize_for_json(df_copy)
+
+        # Delete existing rows then re-insert
         try:
             supabase.table(table_name).delete().neq("id", -1).execute()
         except Exception:
             pass
+
         if not df_copy.empty:
             records = df_copy.to_dict("records")
+            # Remove None-valued keys so Supabase uses column defaults
+            records = [{k: v for k, v in rec.items() if v is not None} for rec in records]
             for i in range(0, len(records), 100):
-                supabase.table(table_name).insert(records[i:i+100]).execute()
+                supabase.table(table_name).insert(records[i:i + 100]).execute()
         return True
     except Exception as e:
         st.error(f"❌ Save failed for `{table_name}`: {e}")
@@ -224,7 +255,7 @@ if not st.session_state.logged_in:
                 else:
                     df = st.session_state.admin_df.copy()
                     if "Username" not in df.columns or "Password" not in df.columns:
-                        st.error("❌ admin_master columns missing. See debug expander above.")
+                        st.error("❌ admin_master columns missing.")
                     else:
                         match = (
                             (df["Username"].astype(str).str.strip() == user.strip()) &
@@ -246,7 +277,7 @@ if not st.session_state.logged_in:
                 else:
                     df = st.session_state.employee_df.copy()
                     if "EmployeeCode" not in df.columns or "Password" not in df.columns:
-                        st.error("❌ employee_master columns missing. See debug expander above.")
+                        st.error("❌ employee_master columns missing.")
                     else:
                         match = df[
                             (df["EmployeeCode"].astype(str).str.strip() == emp_in.strip()) &
@@ -312,12 +343,14 @@ if st.session_state.role == "admin":
 
     elif admin_menu == "👥 Manage Employees":
         tab1, tab2, tab3 = st.tabs(["👁️ View", "➕ Add", "🗑️ Delete"])
+
         with tab1:
             disp = st.session_state.employee_df.drop(columns=["Password"], errors="ignore")
             if not disp.empty:
                 st.dataframe(disp, use_container_width=True, hide_index=True)
             else:
                 st.info("No employees found.")
+
         with tab2:
             with st.form("add_emp"):
                 c1, c2 = st.columns(2)
@@ -329,31 +362,45 @@ if st.session_state.role == "admin":
                 if st.form_submit_button("➕ Add Employee", type="primary"):
                     if not ecode or not ename or not epwd:
                         st.error("All fields required!")
-                    elif safe_col(st.session_state.employee_df, "employeecode").astype(str).str.upper().eq(ecode.strip().upper()).any():
-                        st.error("❌ Code already exists!")
+                    elif safe_col(st.session_state.employee_df, "EmployeeCode").astype(str).str.upper().eq(ecode.strip().upper()).any():
+                        st.error("❌ Employee Code already exists!")
                     else:
-                        new_row = pd.DataFrame([{"employeecode": ecode.strip().upper(), "employeename": ename.strip().title(), "password": epwd.strip()}])
-                        st.session_state.employee_df = pd.concat([st.session_state.employee_df, new_row], ignore_index=True)
+                        # ✅ Use PascalCase keys matching EMP_COLS to avoid NaN columns
+                        new_row = pd.DataFrame([{
+                            "EmployeeCode": ecode.strip().upper(),
+                            "EmployeeName": ename.strip().title(),
+                            "Password":     epwd.strip(),
+                        }])
+                        st.session_state.employee_df = pd.concat(
+                            [st.session_state.employee_df, new_row], ignore_index=True
+                        )
                         if save_to_supabase("employee_master", st.session_state.employee_df):
-                            st.success("✅ Added!"); st.rerun()
+                            st.success("✅ Employee added!")
+                            st.rerun()
+
         with tab3:
             if st.session_state.employee_df.empty:
                 st.info("No employees.")
             else:
-                emp_del = st.selectbox("Select", safe_col(st.session_state.employee_df, "EmployeeCode").unique())
-                if st.button("🗑️ Delete", type="primary"):
+                emp_del = st.selectbox("Select Employee to Delete",
+                                       safe_col(st.session_state.employee_df, "EmployeeCode").unique())
+                if st.button("🗑️ Delete Employee", type="primary"):
                     st.session_state.employee_df = st.session_state.employee_df[
-                        safe_col(st.session_state.employee_df, "EmployeeCode") != emp_del]
+                        safe_col(st.session_state.employee_df, "EmployeeCode") != emp_del
+                    ]
                     if save_to_supabase("employee_master", st.session_state.employee_df):
-                        st.success(f"✅ {emp_del} deleted!"); st.rerun()
+                        st.success(f"✅ {emp_del} deleted!")
+                        st.rerun()
 
     elif admin_menu == "🏪 Manage Stores":
         tab1, tab2, tab3 = st.tabs(["👁️ View", "➕ Add", "🗑️ Delete"])
+
         with tab1:
             if not st.session_state.gst_df.empty:
                 st.dataframe(st.session_state.gst_df, use_container_width=True, hide_index=True)
             else:
                 st.info("No stores found.")
+
         with tab2:
             with st.form("add_store"):
                 c1, c2 = st.columns(2)
@@ -361,7 +408,7 @@ if st.session_state.role == "admin":
                     sname = st.text_input("Store Name*")
                     gstno = st.text_input("GST Number*", max_chars=15)
                 with c2:
-                    city  = st.text_input("City*")
+                    city     = st.text_input("City*")
                     emp_opts = safe_col(st.session_state.employee_df, "EmployeeCode").unique().tolist() or ["—"]
                     emp_sel  = st.selectbox("Assign to Employee*", emp_opts)
                 if st.form_submit_button("➕ Add Store", type="primary"):
@@ -371,31 +418,46 @@ if st.session_state.role == "admin":
                     elif not is_valid_gstin(gc):
                         st.error("❌ Invalid GST! e.g. 22AAAAA0000A1Z5")
                     elif safe_col(st.session_state.gst_df, "GSTNumber").astype(str).str.upper().eq(gc).any():
-                        st.error("❌ GST exists!")
+                        st.error("❌ GST Number already exists!")
                     else:
-                        nid = f"S{len(st.session_state.gst_df)+1:05d}"
-                        st.session_state.gst_df = pd.concat([st.session_state.gst_df,
-                            pd.DataFrame([{"StoreID": nid, "StoreName": sname.strip().title(),
-                                           "GSTNumber": gc, "City": city.strip().title(), "EmployeeCode": emp_sel}])
-                        ], ignore_index=True)
+                        nid = f"S{len(st.session_state.gst_df) + 1:05d}"
+                        new_store = pd.DataFrame([{
+                            "StoreID":      nid,
+                            "StoreName":    sname.strip().title(),
+                            "GSTNumber":    gc,
+                            "City":         city.strip().title(),
+                            "EmployeeCode": emp_sel,
+                        }])
+                        st.session_state.gst_df = pd.concat(
+                            [st.session_state.gst_df, new_store], ignore_index=True
+                        )
                         if save_to_supabase("gst_master", st.session_state.gst_df):
-                            st.success("✅ Store added!"); st.rerun()
+                            st.success("✅ Store added!")
+                            st.rerun()
+
         with tab3:
             if st.session_state.gst_df.empty:
                 st.info("No stores.")
             else:
-                sdel = st.selectbox("Select Store", safe_col(st.session_state.gst_df, "StoreID").unique())
+                sdel = st.selectbox("Select Store to Delete",
+                                    safe_col(st.session_state.gst_df, "StoreID").unique())
                 if st.button("🗑️ Delete Store", type="primary"):
-                    st.session_state.gst_df = st.session_state.gst_df[safe_col(st.session_state.gst_df, "StoreID") != sdel]
+                    st.session_state.gst_df = st.session_state.gst_df[
+                        safe_col(st.session_state.gst_df, "StoreID") != sdel
+                    ]
                     if save_to_supabase("gst_master", st.session_state.gst_df):
-                        st.success(f"✅ {sdel} deleted!"); st.rerun()
+                        st.success(f"✅ {sdel} deleted!")
+                        st.rerun()
 
     elif admin_menu == "📋 View Plans":
         st.subheader("All Visit Plans")
         c1, c2, c3 = st.columns(3)
-        with c1: femp  = st.selectbox("Employee", ["All"] + list(safe_col(st.session_state.planned_df, "EmployeeName").dropna().unique()))
-        with c2: fcity = st.selectbox("City",     ["All"] + list(safe_col(st.session_state.planned_df, "City").dropna().unique()))
-        with c3: drange = st.date_input("Date Range", value=(date.today()-timedelta(days=30), date.today()))
+        with c1:
+            femp  = st.selectbox("Employee", ["All"] + list(safe_col(st.session_state.planned_df, "EmployeeName").dropna().unique()))
+        with c2:
+            fcity = st.selectbox("City",     ["All"] + list(safe_col(st.session_state.planned_df, "City").dropna().unique()))
+        with c3:
+            drange = st.date_input("Date Range", value=(date.today() - timedelta(days=30), date.today()))
 
         fp = st.session_state.planned_df.copy()
         if femp  != "All" and "EmployeeName" in fp.columns: fp = fp[fp["EmployeeName"] == femp]
@@ -404,8 +466,10 @@ if st.session_state.role == "admin":
             fp = fp[(fp["VisitDate"] >= drange[0]) & (fp["VisitDate"] <= drange[1])]
 
         st.markdown(f"**{len(fp)} record(s)**")
-        st.dataframe(fp.sort_values("VisitDate", ascending=False) if "VisitDate" in fp.columns else fp,
-                     use_container_width=True, hide_index=True)
+        st.dataframe(
+            fp.sort_values("VisitDate", ascending=False) if "VisitDate" in fp.columns else fp,
+            use_container_width=True, hide_index=True,
+        )
         download_beat_plan_button(fp, "admin_dl", "Beat_Plan_Admin")
 
     elif admin_menu == "🔄 Refresh Data":
@@ -415,7 +479,8 @@ if st.session_state.role == "admin":
             st.session_state.gst_df      = load_from_supabase("gst_master",      GST_COLS)
             st.session_state.planned_df  = load_from_supabase("planned_visits",  PLAN_COLS)
             st.session_state.admin_df    = load_from_supabase("admin_master",    ADMIN_COLS)
-            st.success("✅ Refreshed!"); st.rerun()
+            st.success("✅ Refreshed!")
+            st.rerun()
 
 # ====================== EMPLOYEE PANEL ======================
 else:
@@ -440,9 +505,10 @@ else:
             st.stop()
 
         c1, c2, c3 = st.columns(3)
-        with c1: visit_date = st.date_input("📅 Date", value=date.today(), key="beat_date")
+        with c1:
+            visit_date = st.date_input("📅 Date", value=date.today(), key="beat_date")
         with c2:
-            city_opts = sorted(safe_col(employee_stores, "City").dropna().unique().tolist())
+            city_opts  = sorted(safe_col(employee_stores, "City").dropna().unique().tolist())
             sel_cities = st.multiselect("🌍 Cities (max 3)", city_opts, max_selections=3, key="city_ms")
         with c3:
             st.markdown("<br>", unsafe_allow_html=True)
@@ -454,8 +520,8 @@ else:
             (st.session_state.planned_df["VisitDate"] == visit_date)
         ] if "VisitDate" in st.session_state.planned_df.columns else pd.DataFrame(columns=PLAN_COLS)
 
-        pc    = len(daily_plans)
-        pcol  = get_progress_color(pc, 10)
+        pc   = len(daily_plans)
+        pcol = get_progress_color(pc, 10)
 
         st.markdown(f"""
             <div class='progress-section'>
@@ -464,16 +530,16 @@ else:
                     <span style='font-weight:800;color:{pcol};font-size:18px;'>{pc}/10</span>
                 </div>
                 <div style='height:10px;background:#e2e8f0;border-radius:10px;overflow:hidden;'>
-                    <div style='width:{min(pc*10,100)}%;height:100%;background:{pcol};border-radius:10px;'></div>
+                    <div style='width:{min(pc * 10, 100)}%;height:100%;background:{pcol};border-radius:10px;'></div>
                 </div>
                 <div style='margin-top:8px;color:#64748b;font-size:13px;'>
-                    {"🚫 Maximum 10 stores reached." if pc >= 10 else f"✅ {10-pc} more store(s) can be added."}
+                    {"🚫 Maximum 10 stores reached." if pc >= 10 else f"✅ {10 - pc} more store(s) can be added."}
                 </div>
             </div>""", unsafe_allow_html=True)
 
         if not daily_plans.empty:
             with st.expander(f"✅ Already planned for {visit_date} ({pc} stores)"):
-                show = [c for c in ["Store","City","GSTNumber"] if c in daily_plans.columns]
+                show = [c for c in ["Store", "City", "GSTNumber"] if c in daily_plans.columns]
                 st.dataframe(daily_plans[show], use_container_width=True, hide_index=True)
 
         if pc < 10:
@@ -492,45 +558,54 @@ else:
                         st.markdown(f"""
                             <div class='store-card'>
                                 <div style='font-weight:700;font-size:18px;color:#1e293b;'>
-                                    🏪 {row.get('StoreName','—')}
+                                    🏪 {row.get('StoreName', '—')}
                                 </div>
                                 <div style='margin-top:10px;color:#475569;line-height:1.8;'>
-                                    <strong>ID:</strong> {row.get('StoreID','—')} &nbsp;
-                                    <strong>City:</strong> {row.get('City','—')} &nbsp;
-                                    <strong>GST:</strong> {row.get('GSTNumber','—')}
+                                    <strong>ID:</strong> {row.get('StoreID', '—')} &nbsp;
+                                    <strong>City:</strong> {row.get('City', '—')} &nbsp;
+                                    <strong>GST:</strong> {row.get('GSTNumber', '—')}
                                 </div>
                             </div>""", unsafe_allow_html=True)
                     with col2:
                         st.markdown("<br><br>", unsafe_allow_html=True)
                         if st.button("➕ Add", key=f"add_{idx}_{visit_date}"):
                             new_plan = pd.DataFrame([{
-                                "EmployeeCode": emp_code, "EmployeeName": emp_name,
-                                "City": row.get("City",""), "Store": row.get("StoreName",""),
-                                "StoreID": row.get("StoreID",""), "GSTNumber": row.get("GSTNumber",""),
-                                "VisitDate": visit_date,
+                                "EmployeeCode": emp_code,
+                                "EmployeeName": emp_name,
+                                "City":         row.get("City", ""),
+                                "Store":        row.get("StoreName", ""),
+                                "StoreID":      row.get("StoreID", ""),
+                                "GSTNumber":    row.get("GSTNumber", ""),
+                                "VisitDate":    visit_date,
                             }])
                             st.session_state.planned_df = pd.concat(
-                                [st.session_state.planned_df, new_plan], ignore_index=True)
+                                [st.session_state.planned_df, new_plan], ignore_index=True
+                            )
                             if save_to_supabase("planned_visits", st.session_state.planned_df):
-                                st.success(f"✅ {row.get('StoreName','')} added!"); st.rerun()
+                                st.success(f"✅ {row.get('StoreName', '')} added!")
+                                st.rerun()
 
         st.markdown("---")
         emp_plans = st.session_state.planned_df[
-            safe_col(st.session_state.planned_df, "EmployeeCode").astype(str) == str(emp_code)]
+            safe_col(st.session_state.planned_df, "EmployeeCode").astype(str) == str(emp_code)
+        ]
         download_beat_plan_button(emp_plans, "emp_dl", f"Beat_Plan_{emp_code}")
 
     elif emp_menu == "📅 My Plans":
         my = st.session_state.planned_df[
-            safe_col(st.session_state.planned_df, "EmployeeCode").astype(str) == str(emp_code)]
+            safe_col(st.session_state.planned_df, "EmployeeCode").astype(str) == str(emp_code)
+        ]
         if my.empty:
             st.info("No plans yet.")
         else:
-            c1,c2,c3 = st.columns(3)
+            c1, c2, c3 = st.columns(3)
             with c1: st.metric("Total Plans",  len(my))
-            with c2: st.metric("Cities",       safe_col(my,"City").nunique())
-            with c3: st.metric("Unique Dates", len(safe_col(my,"VisitDate").unique()))
-            st.dataframe(my.sort_values("VisitDate",ascending=False) if "VisitDate" in my.columns else my,
-                         use_container_width=True, hide_index=True)
+            with c2: st.metric("Cities",       safe_col(my, "City").nunique())
+            with c3: st.metric("Unique Dates", len(safe_col(my, "VisitDate").unique()))
+            st.dataframe(
+                my.sort_values("VisitDate", ascending=False) if "VisitDate" in my.columns else my,
+                use_container_width=True, hide_index=True,
+            )
             download_beat_plan_button(my, "my_dl", f"My_Plans_{emp_code}")
 
     elif emp_menu == "📆 Upcoming Plans":
@@ -538,9 +613,10 @@ else:
             st.info("No upcoming visits.")
         else:
             upcoming = st.session_state.planned_df[
-                (safe_col(st.session_state.planned_df,"EmployeeCode").astype(str) == str(emp_code)) &
+                (safe_col(st.session_state.planned_df, "EmployeeCode").astype(str) == str(emp_code)) &
                 (st.session_state.planned_df["VisitDate"] >= date.today())
             ].sort_values("VisitDate")
+
             if upcoming.empty:
                 st.info("No upcoming visits.")
             else:
@@ -555,60 +631,70 @@ else:
                             &nbsp;— {len(plans)} store(s)
                         </div>""", unsafe_allow_html=True)
                     for _, p in plans.iterrows():
-                        st.markdown(f"&nbsp;&nbsp;&nbsp;• **{p.get('Store','—')}** — {p.get('City','—')}")
+                        st.markdown(f"&nbsp;&nbsp;&nbsp;• **{p.get('Store', '—')}** — {p.get('City', '—')}")
 
     elif emp_menu == "📊 Analytics":
         my = st.session_state.planned_df[
-            safe_col(st.session_state.planned_df,"EmployeeCode").astype(str) == str(emp_code)]
+            safe_col(st.session_state.planned_df, "EmployeeCode").astype(str) == str(emp_code)
+        ]
         if my.empty:
             st.info("No data yet.")
         else:
-            c1,c2,c3,c4 = st.columns(4)
+            c1, c2, c3, c4 = st.columns(4)
             with c1: st.metric("Total Visits", len(my))
-            with c2: st.metric("Cities",       safe_col(my,"City").nunique())
-            with c3: st.metric("Stores",       safe_col(my,"Store").nunique())
+            with c2: st.metric("Cities",       safe_col(my, "City").nunique())
+            with c3: st.metric("Stores",       safe_col(my, "Store").nunique())
             with c4:
-                tm = my[pd.to_datetime(safe_col(my,"VisitDate"),errors="coerce").dt.month == date.today().month] \
+                tm = my[pd.to_datetime(safe_col(my, "VisitDate"), errors="coerce").dt.month == date.today().month] \
                     if "VisitDate" in my.columns else pd.DataFrame()
                 st.metric("This Month", len(tm))
+
             st.markdown("---")
-            c1,c2 = st.columns(2)
+            c1, c2 = st.columns(2)
             with c1:
                 st.subheader("Visits by City")
-                if "City" in my.columns: st.bar_chart(my.groupby("City").size())
+                if "City" in my.columns:
+                    st.bar_chart(my.groupby("City").size())
             with c2:
                 st.subheader("Visits Over Time")
                 if "VisitDate" in my.columns:
                     tmp = my.copy()
-                    tmp["Month"] = pd.to_datetime(tmp["VisitDate"],errors="coerce").dt.to_period("M").astype(str)
+                    tmp["Month"] = pd.to_datetime(tmp["VisitDate"], errors="coerce").dt.to_period("M").astype(str)
                     st.line_chart(tmp.groupby("Month").size())
 
     elif emp_menu == "➕ Request New Store":
         st.subheader("➕ Add New Store")
         with st.form("store_req"):
-            c1,c2 = st.columns(2)
+            c1, c2 = st.columns(2)
             with c1:
                 sname = st.text_input("Store Name*")
                 city  = st.text_input("City*")
             with c2:
-                gst   = st.text_input("GST Number*", max_chars=15)
-                _     = st.text_area("Remarks (optional)", height=100)
+                gst = st.text_input("GST Number*", max_chars=15)
+                _   = st.text_area("Remarks (optional)", height=100)
             if st.form_submit_button("✅ Add Store", type="primary"):
                 gc = gst.strip().upper()
                 if not sname or not city or not gc:
                     st.error("❌ All fields required!")
                 elif not is_valid_gstin(gc):
                     st.error("❌ Invalid GST! e.g. 22AAAAA0000A1Z5")
-                elif safe_col(st.session_state.gst_df,"GSTNumber").astype(str).str.upper().eq(gc).any():
-                    st.error("❌ GST exists!")
+                elif safe_col(st.session_state.gst_df, "GSTNumber").astype(str).str.upper().eq(gc).any():
+                    st.error("❌ GST Number already exists!")
                 else:
-                    nid = f"S{len(st.session_state.gst_df)+1:05d}"
-                    st.session_state.gst_df = pd.concat([st.session_state.gst_df,
-                        pd.DataFrame([{"StoreID":nid,"StoreName":sname.strip().title(),
-                                       "GSTNumber":gc,"City":city.strip().title(),"EmployeeCode":emp_code}])
-                    ], ignore_index=True)
+                    nid = f"S{len(st.session_state.gst_df) + 1:05d}"
+                    new_store = pd.DataFrame([{
+                        "StoreID":      nid,
+                        "StoreName":    sname.strip().title(),
+                        "GSTNumber":    gc,
+                        "City":         city.strip().title(),
+                        "EmployeeCode": emp_code,
+                    }])
+                    st.session_state.gst_df = pd.concat(
+                        [st.session_state.gst_df, new_store], ignore_index=True
+                    )
                     if save_to_supabase("gst_master", st.session_state.gst_df):
-                        st.success(f"✅ '{sname.title()}' added!"); st.rerun()
+                        st.success(f"✅ '{sname.title()}' added!")
+                        st.rerun()
 
 # ====================== FOOTER ======================
 st.markdown("---")
