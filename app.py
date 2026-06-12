@@ -115,9 +115,19 @@ def clean_dataframe(df, expected_columns):
 
 def load_from_supabase(table_name, columns):
     try:
-        response = supabase.table(table_name).select("*").execute()
-        if response.data:
-            df = pd.DataFrame(response.data)
+        all_rows = []
+        batch_size = 1000
+        offset = 0
+        while True:
+            response = supabase.table(table_name).select("*").range(offset, offset + batch_size - 1).execute()
+            if not response.data:
+                break
+            all_rows.extend(response.data)
+            if len(response.data) < batch_size:
+                break  # last page
+            offset += batch_size
+        if all_rows:
+            df = pd.DataFrame(all_rows)
             return clean_dataframe(df, columns)
         return pd.DataFrame(columns=columns)
     except Exception as e:
@@ -602,4 +612,4 @@ else:
 
 # ====================== FOOTER ======================
 st.markdown("---")
-st.caption("Beat Plan Pro © 2026 | 🚀 Powered by Supabase")
+st.caption("Beat Plan Pro © 2026 | 🚀 Created By Bipin Pandey")
