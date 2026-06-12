@@ -329,10 +329,10 @@ if st.session_state.role == "admin":
                 if st.form_submit_button("➕ Add Employee", type="primary"):
                     if not ecode or not ename or not epwd:
                         st.error("All fields required!")
-                    elif safe_col(st.session_state.employee_df, "EmployeeCode").astype(str).str.upper().eq(ecode.strip().upper()).any():
+                    elif safe_col(st.session_state.employee_df, "employeecode").astype(str).str.upper().eq(ecode.strip().upper()).any():
                         st.error("❌ Code already exists!")
                     else:
-                        new_row = pd.DataFrame([{"EmployeeCode": ecode.strip().upper(), "EmployeeName": ename.strip().title(), "Password": epwd.strip()}])
+                        new_row = pd.DataFrame([{"employeecode": ecode.strip().upper(), "employeename": ename.strip().title(), "password": epwd.strip()}])
                         st.session_state.employee_df = pd.concat([st.session_state.employee_df, new_row], ignore_index=True)
                         if save_to_supabase("employee_master", st.session_state.employee_df):
                             st.success("✅ Added!"); st.rerun()
