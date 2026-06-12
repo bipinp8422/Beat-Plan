@@ -304,7 +304,10 @@ if st.session_state.role == "admin":
         tab1, tab2, tab3 = st.tabs(["👁️ View", "➕ Add", "🗑️ Delete"])
         with tab1:
             disp = st.session_state.employee_df.drop(columns=["Password"], errors="ignore")
-            st.dataframe(disp, use_container_width=True, hide_index=True) if not disp.empty else st.info("No employees.")
+            if not disp.empty:
+                st.dataframe(disp, use_container_width=True, hide_index=True)
+            else:
+                st.info("No employees found.")
         with tab2:
             with st.form("add_emp"):
                 c1, c2 = st.columns(2)
@@ -337,7 +340,10 @@ if st.session_state.role == "admin":
     elif admin_menu == "🏪 Manage Stores":
         tab1, tab2, tab3 = st.tabs(["👁️ View", "➕ Add", "🗑️ Delete"])
         with tab1:
-            st.dataframe(st.session_state.gst_df, use_container_width=True, hide_index=True) if not st.session_state.gst_df.empty else st.info("No stores.")
+            if not st.session_state.gst_df.empty:
+                st.dataframe(st.session_state.gst_df, use_container_width=True, hide_index=True)
+            else:
+                st.info("No stores found.")
         with tab2:
             with st.form("add_store"):
                 c1, c2 = st.columns(2)
