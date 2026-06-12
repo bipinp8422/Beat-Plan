@@ -329,10 +329,10 @@ if st.session_state.role == "admin":
                 if st.form_submit_button("➕ Add Employee", type="primary"):
                     if not ecode or not ename or not epwd:
                         st.error("All fields required!")
-                    elif safe_col(st.session_state.employee_df, "employeecode").astype(str).str.upper().eq(ecode.strip().upper()).any():
+                    elif safe_col(st.session_state.employee_df, "EmployeeCode").astype(str).str.upper().eq(ecode.strip().upper()).any():
                         st.error("❌ Code already exists!")
                     else:
-                        new_row = pd.DataFrame([{"employeecode": ecode.strip().upper(), "EmployeeName": ename.strip().title(), "Password": epwd.strip()}])
+                        new_row = pd.DataFrame([{"EmployeeCode": ecode.strip().upper(), "EmployeeName": ename.strip().title(), "Password": epwd.strip()}])
                         st.session_state.employee_df = pd.concat([st.session_state.employee_df, new_row], ignore_index=True)
                         if save_to_supabase("employee_master", st.session_state.employee_df):
                             st.success("✅ Added!"); st.rerun()
@@ -340,10 +340,10 @@ if st.session_state.role == "admin":
             if st.session_state.employee_df.empty:
                 st.info("No employees.")
             else:
-                emp_del = st.selectbox("Select", safe_col(st.session_state.employee_df, "employeecode").unique())
+                emp_del = st.selectbox("Select", safe_col(st.session_state.employee_df, "EmployeeCode").unique())
                 if st.button("🗑️ Delete", type="primary"):
                     st.session_state.employee_df = st.session_state.employee_df[
-                        safe_col(st.session_state.employee_df, "Employeecode") != emp_del]
+                        safe_col(st.session_state.employee_df, "EmployeeCode") != emp_del]
                     if save_to_supabase("employee_master", st.session_state.employee_df):
                         st.success(f"✅ {emp_del} deleted!"); st.rerun()
 
@@ -362,7 +362,7 @@ if st.session_state.role == "admin":
                     gstno = st.text_input("GST Number*", max_chars=15)
                 with c2:
                     city  = st.text_input("City*")
-                    emp_opts = safe_col(st.session_state.employee_df, "employeecode").unique().tolist() or ["—"]
+                    emp_opts = safe_col(st.session_state.employee_df, "EmployeeCode").unique().tolist() or ["—"]
                     emp_sel  = st.selectbox("Assign to Employee*", emp_opts)
                 if st.form_submit_button("➕ Add Store", type="primary"):
                     gc = gstno.strip().upper()
@@ -376,7 +376,7 @@ if st.session_state.role == "admin":
                         nid = f"S{len(st.session_state.gst_df)+1:05d}"
                         st.session_state.gst_df = pd.concat([st.session_state.gst_df,
                             pd.DataFrame([{"StoreID": nid, "StoreName": sname.strip().title(),
-                                           "GSTNumber": gc, "City": city.strip().title(), "employeecode": emp_sel}])
+                                           "GSTNumber": gc, "City": city.strip().title(), "EmployeeCode": emp_sel}])
                         ], ignore_index=True)
                         if save_to_supabase("gst_master", st.session_state.gst_df):
                             st.success("✅ Store added!"); st.rerun()
@@ -426,7 +426,7 @@ else:
     st.markdown("<p class='sub-header'>Your Beat Planning Dashboard</p>", unsafe_allow_html=True)
 
     employee_stores = st.session_state.gst_df[
-        safe_col(st.session_state.gst_df, "employeecode").astype(str) == str(emp_code)
+        safe_col(st.session_state.gst_df, "EmployeeCode").astype(str) == str(emp_code)
     ] if not st.session_state.gst_df.empty else pd.DataFrame(columns=GST_COLS)
 
     emp_menu = st.sidebar.radio(
@@ -450,7 +450,7 @@ else:
                 st.session_state.selected_cities = sel_cities
 
         daily_plans = st.session_state.planned_df[
-            (safe_col(st.session_state.planned_df, "employeecode").astype(str) == str(emp_code)) &
+            (safe_col(st.session_state.planned_df, "EmployeeCode").astype(str) == str(emp_code)) &
             (st.session_state.planned_df["VisitDate"] == visit_date)
         ] if "VisitDate" in st.session_state.planned_df.columns else pd.DataFrame(columns=PLAN_COLS)
 
@@ -504,7 +504,7 @@ else:
                         st.markdown("<br><br>", unsafe_allow_html=True)
                         if st.button("➕ Add", key=f"add_{idx}_{visit_date}"):
                             new_plan = pd.DataFrame([{
-                                "employeecode": emp_code, "EmployeeName": emp_name,
+                                "EmployeeCode": emp_code, "EmployeeName": emp_name,
                                 "City": row.get("City",""), "Store": row.get("StoreName",""),
                                 "StoreID": row.get("StoreID",""), "GSTNumber": row.get("GSTNumber",""),
                                 "VisitDate": visit_date,
@@ -559,7 +559,7 @@ else:
 
     elif emp_menu == "📊 Analytics":
         my = st.session_state.planned_df[
-            safe_col(st.session_state.planned_df,"employeecode").astype(str) == str(emp_code)]
+            safe_col(st.session_state.planned_df,"EmployeeCode").astype(str) == str(emp_code)]
         if my.empty:
             st.info("No data yet.")
         else:
@@ -605,7 +605,7 @@ else:
                     nid = f"S{len(st.session_state.gst_df)+1:05d}"
                     st.session_state.gst_df = pd.concat([st.session_state.gst_df,
                         pd.DataFrame([{"StoreID":nid,"StoreName":sname.strip().title(),
-                                       "GSTNumber":gc,"City":city.strip().title(),"employeecode":emp_code}])
+                                       "GSTNumber":gc,"City":city.strip().title(),"EmployeeCode":emp_code}])
                     ], ignore_index=True)
                     if save_to_supabase("gst_master", st.session_state.gst_df):
                         st.success(f"✅ '{sname.title()}' added!"); st.rerun()
