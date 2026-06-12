@@ -26,237 +26,342 @@ except Exception as e:
 # ====================== STYLING ======================
 st.markdown("""
 <style>
-    /* ── Base ── */
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap');
 
     html, body, [class*="css"] {
-        font-family: 'Inter', sans-serif;
+        font-family: 'Plus Jakarta Sans', sans-serif;
     }
 
+    /* ── App background ── */
     .stApp {
-        background: #f8f9fb;
+        background: #f0f2f8;
     }
 
-    /* ── Hide default Streamlit chrome ── */
+    /* ── Hide chrome ── */
     #MainMenu, footer, header { visibility: hidden; }
     .block-container {
-        padding: 1.5rem 2rem 3rem 2rem !important;
-        max-width: 1200px !important;
+        padding: 2rem 2.5rem 4rem 2.5rem !important;
+        max-width: 1280px !important;
     }
 
-    /* ── Sidebar ── */
+    /* ══════════════════════════════════════
+       SIDEBAR  — deep navy slate
+    ══════════════════════════════════════ */
     [data-testid="stSidebar"] {
-        background: #ffffff !important;
-        border-right: 1px solid #eaecf0 !important;
+        background: #0f172a !important;
+        border-right: none !important;
     }
-    [data-testid="stSidebar"] .stRadio > label {
-        display: none;
+    [data-testid="stSidebar"] > div:first-child {
+        background: #0f172a !important;
     }
+
+    /* Nav radio group */
+    [data-testid="stSidebar"] .stRadio > label { display: none; }
     [data-testid="stSidebar"] .stRadio div[role="radiogroup"] {
-        gap: 2px !important;
+        gap: 3px !important;
     }
     [data-testid="stSidebar"] .stRadio div[role="radiogroup"] label {
         background: transparent !important;
         border: none !important;
-        border-radius: 8px !important;
-        padding: 9px 14px !important;
+        border-radius: 10px !important;
+        padding: 10px 16px !important;
         font-size: 13.5px !important;
         font-weight: 400 !important;
-        color: #4b5563 !important;
+        color: #94a3b8 !important;
         cursor: pointer !important;
-        transition: background 0.15s !important;
+        transition: all 0.18s ease !important;
         width: 100% !important;
     }
     [data-testid="stSidebar"] .stRadio div[role="radiogroup"] label:hover {
-        background: #f3f4f6 !important;
+        background: rgba(255,255,255,0.07) !important;
+        color: #e2e8f0 !important;
     }
-    [data-testid="stSidebar"] .stRadio div[role="radiogroup"] label[data-testid="stMarkdownContainer"] p {
-        margin: 0 !important;
-    }
-    /* selected nav item */
     [data-testid="stSidebar"] .stRadio div[role="radiogroup"] label:has(input:checked) {
-        background: #eff6ff !important;
-        color: #1d4ed8 !important;
-        font-weight: 500 !important;
-        border-left: 2px solid #1d4ed8 !important;
-        border-radius: 0 8px 8px 0 !important;
+        background: linear-gradient(135deg, rgba(99,102,241,0.25), rgba(139,92,246,0.18)) !important;
+        color: #a5b4fc !important;
+        font-weight: 600 !important;
+        border-left: 2px solid #818cf8 !important;
+        border-radius: 0 10px 10px 0 !important;
     }
 
-    /* ── Topbar brand ── */
-    .brand-bar {
+    /* Sidebar signout button */
+    [data-testid="stSidebar"] .stButton > button {
+        background: rgba(255,255,255,0.06) !important;
+        color: #94a3b8 !important;
+        border: 1px solid rgba(255,255,255,0.1) !important;
+        border-radius: 10px !important;
+        font-size: 13px !important;
+        height: 38px !important;
+        font-weight: 500 !important;
+        transition: all 0.18s !important;
+    }
+    [data-testid="stSidebar"] .stButton > button:hover {
+        background: rgba(255,255,255,0.11) !important;
+        color: #e2e8f0 !important;
+    }
+
+    /* ── Sidebar brand ── */
+    .sidebar-brand {
+        padding: 1.4rem 1.25rem 1rem 1.25rem;
+        border-bottom: 1px solid rgba(255,255,255,0.08);
+        margin-bottom: 0.5rem;
+    }
+    .sidebar-logo-row {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin-bottom: 3px;
+    }
+    .sidebar-logo-icon {
+        width: 34px;
+        height: 34px;
+        background: linear-gradient(135deg, #6366f1, #8b5cf6);
+        border-radius: 9px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 17px;
+        flex-shrink: 0;
+    }
+    .sidebar-brand-title {
+        font-size: 15px;
+        font-weight: 700;
+        color: #f1f5f9;
+        letter-spacing: -0.2px;
+    }
+    .sidebar-brand-role {
+        font-size: 11.5px;
+        color: #64748b;
+        margin-top: 1px;
+        padding-left: 44px;
+    }
+    .sidebar-section-label {
+        font-size: 10px;
+        text-transform: uppercase;
+        letter-spacing: 0.1em;
+        color: #334155;
+        font-weight: 600;
+        padding: 1rem 1.25rem 0.35rem 1.25rem;
+    }
+    .sidebar-divider {
+        height: 1px;
+        background: rgba(255,255,255,0.07);
+        margin: 0.75rem 1.25rem;
+    }
+
+    /* ══════════════════════════════════════
+       TOPBAR  (page header)
+    ══════════════════════════════════════ */
+    .topbar {
         display: flex;
         align-items: center;
         justify-content: space-between;
-        padding: 0 0 1.5rem 0;
-        border-bottom: 1px solid #eaecf0;
+        padding: 1.25rem 1.75rem;
+        background: #ffffff;
+        border-radius: 16px;
+        border: 1px solid #e2e8f0;
         margin-bottom: 1.75rem;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.04);
     }
-    .brand-title {
-        font-size: 17px;
-        font-weight: 600;
-        color: #111827;
-        letter-spacing: -0.2px;
+    .topbar-title {
+        font-size: 19px;
+        font-weight: 700;
+        color: #0f172a;
+        letter-spacing: -0.4px;
     }
-    .brand-sub {
-        font-size: 12px;
-        color: #6b7280;
-        margin-top: 1px;
+    .topbar-sub {
+        font-size: 12.5px;
+        color: #94a3b8;
+        margin-top: 2px;
     }
     .user-chip {
         display: inline-flex;
         align-items: center;
-        gap: 8px;
-        background: #f9fafb;
-        border: 1px solid #e5e7eb;
-        border-radius: 20px;
-        padding: 5px 12px 5px 6px;
+        gap: 9px;
+        background: #f8fafc;
+        border: 1px solid #e2e8f0;
+        border-radius: 24px;
+        padding: 5px 14px 5px 5px;
         font-size: 13px;
-        color: #374151;
+        color: #334155;
         font-weight: 500;
     }
     .user-avatar {
-        width: 26px;
-        height: 26px;
+        width: 28px;
+        height: 28px;
         border-radius: 50%;
-        background: #dbeafe;
-        color: #1d4ed8;
+        background: linear-gradient(135deg, #6366f1, #8b5cf6);
+        color: #ffffff;
         font-size: 10px;
-        font-weight: 600;
+        font-weight: 700;
         display: inline-flex;
         align-items: center;
         justify-content: center;
     }
 
-    /* ── Metric cards ── */
+    /* ══════════════════════════════════════
+       METRIC CARDS
+    ══════════════════════════════════════ */
     .metric-grid {
         display: grid;
         grid-template-columns: repeat(4, minmax(0, 1fr));
-        gap: 12px;
+        gap: 14px;
         margin-bottom: 1.75rem;
     }
     .metric-card {
         background: #ffffff;
-        border: 1px solid #eaecf0;
-        border-radius: 12px;
-        padding: 1.1rem 1.25rem;
+        border: 1px solid #e2e8f0;
+        border-radius: 16px;
+        padding: 1.25rem 1.4rem;
+        position: relative;
+        overflow: hidden;
+        box-shadow: 0 1px 4px rgba(0,0,0,0.04);
+        transition: box-shadow 0.2s, transform 0.2s;
     }
+    .metric-card::before {
+        content: '';
+        position: absolute;
+        top: 0; left: 0; right: 0;
+        height: 3px;
+        border-radius: 16px 16px 0 0;
+    }
+    .metric-card-blue::before  { background: linear-gradient(90deg, #6366f1, #818cf8); }
+    .metric-card-green::before { background: linear-gradient(90deg, #10b981, #34d399); }
+    .metric-card-amber::before { background: linear-gradient(90deg, #f59e0b, #fbbf24); }
+    .metric-card-purple::before{ background: linear-gradient(90deg, #8b5cf6, #a78bfa); }
+
     .metric-icon-wrap {
-        width: 36px;
-        height: 36px;
-        border-radius: 8px;
+        width: 40px;
+        height: 40px;
+        border-radius: 10px;
         display: flex;
         align-items: center;
         justify-content: center;
         font-size: 18px;
-        margin-bottom: 10px;
+        margin-bottom: 12px;
     }
     .metric-number {
-        font-size: 24px;
-        font-weight: 600;
-        color: #111827;
+        font-size: 28px;
+        font-weight: 700;
+        color: #0f172a;
         line-height: 1;
-        margin-bottom: 3px;
+        letter-spacing: -1px;
+        margin-bottom: 4px;
     }
     .metric-label {
         font-size: 12px;
-        color: #6b7280;
+        color: #94a3b8;
+        font-weight: 500;
+        letter-spacing: 0.02em;
     }
     .metric-trend {
-        font-size: 11px;
-        margin-top: 8px;
-        padding-top: 8px;
-        border-top: 1px solid #f3f4f6;
-        color: #9ca3af;
+        font-size: 11.5px;
+        margin-top: 10px;
+        padding-top: 10px;
+        border-top: 1px solid #f1f5f9;
+        color: #cbd5e1;
     }
-    .metric-trend .up { color: #16a34a; font-weight: 500; }
+    .metric-trend .up { color: #10b981; font-weight: 600; }
 
-    /* ── Section headers ── */
+    /* ══════════════════════════════════════
+       SECTION HEADERS
+    ══════════════════════════════════════ */
     .section-header {
-        font-size: 15px;
-        font-weight: 600;
-        color: #111827;
+        font-size: 14px;
+        font-weight: 700;
+        color: #0f172a;
         margin-bottom: 12px;
         margin-top: 1.5rem;
         display: flex;
         align-items: center;
-        gap: 7px;
+        gap: 8px;
+        letter-spacing: -0.1px;
     }
     .section-count {
         font-size: 11px;
-        background: #f3f4f6;
-        color: #6b7280;
-        padding: 2px 7px;
+        background: #f1f5f9;
+        color: #64748b;
+        padding: 2px 8px;
         border-radius: 20px;
-        font-weight: 500;
+        font-weight: 600;
     }
 
-    /* ── Progress bar ── */
+    /* ══════════════════════════════════════
+       PROGRESS BAR CARD
+    ══════════════════════════════════════ */
     .progress-wrap {
         background: #ffffff;
-        border: 1px solid #eaecf0;
-        border-radius: 12px;
-        padding: 1.1rem 1.25rem;
-        margin-bottom: 1.25rem;
+        border: 1px solid #e2e8f0;
+        border-radius: 16px;
+        padding: 1.25rem 1.5rem;
+        margin-bottom: 1.5rem;
+        box-shadow: 0 1px 4px rgba(0,0,0,0.04);
     }
     .progress-row {
         display: flex;
         justify-content: space-between;
         align-items: center;
-        margin-bottom: 8px;
+        margin-bottom: 10px;
     }
     .progress-title {
-        font-size: 13.5px;
-        font-weight: 500;
-        color: #111827;
+        font-size: 14px;
+        font-weight: 600;
+        color: #0f172a;
     }
     .progress-fraction {
         font-size: 13px;
-        color: #6b7280;
+        color: #94a3b8;
     }
     .progress-fraction strong {
-        color: #111827;
-        font-weight: 600;
+        color: #0f172a;
+        font-weight: 700;
     }
     .bar-bg {
-        height: 6px;
-        background: #f3f4f6;
+        height: 8px;
+        background: #f1f5f9;
         border-radius: 99px;
         overflow: hidden;
     }
     .bar-fill {
         height: 100%;
         border-radius: 99px;
-        transition: width 0.3s;
+        transition: width 0.4s cubic-bezier(.4,0,.2,1);
     }
-    .bar-blue  { background: #2563eb; }
-    .bar-amber { background: #d97706; }
-    .bar-red   { background: #dc2626; }
+    .bar-blue  { background: linear-gradient(90deg, #6366f1, #818cf8); }
+    .bar-amber { background: linear-gradient(90deg, #f59e0b, #fbbf24); }
+    .bar-red   { background: linear-gradient(90deg, #ef4444, #f87171); }
     .progress-note {
-        font-size: 11.5px;
-        color: #9ca3af;
-        margin-top: 6px;
+        font-size: 12px;
+        color: #94a3b8;
+        margin-top: 8px;
     }
 
-    /* ── Store cards ── */
+    /* ══════════════════════════════════════
+       STORE CARDS
+    ══════════════════════════════════════ */
     .store-card {
         background: #ffffff;
-        border: 1px solid #eaecf0;
-        border-radius: 12px;
-        padding: 0.9rem 1.1rem;
+        border: 1px solid #e2e8f0;
+        border-radius: 14px;
+        padding: 1rem 1.25rem;
         margin-bottom: 8px;
         display: flex;
         align-items: center;
-        gap: 12px;
-        transition: border-color 0.15s;
+        gap: 14px;
+        transition: border-color 0.2s, box-shadow 0.2s;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.03);
     }
-    .store-card:hover { border-color: #d1d5db; }
+    .store-card:hover {
+        border-color: #c7d2fe;
+        box-shadow: 0 4px 12px rgba(99,102,241,0.08);
+    }
     .store-avatar {
-        width: 40px;
-        height: 40px;
-        border-radius: 9px;
-        background: #eff6ff;
-        color: #2563eb;
-        font-size: 18px;
+        width: 44px;
+        height: 44px;
+        border-radius: 11px;
+        background: linear-gradient(135deg, #eef2ff, #e0e7ff);
+        color: #6366f1;
+        font-size: 20px;
         display: flex;
         align-items: center;
         justify-content: center;
@@ -264,220 +369,316 @@ st.markdown("""
     }
     .store-info { flex: 1; min-width: 0; }
     .store-name {
-        font-size: 13.5px;
-        font-weight: 500;
-        color: #111827;
+        font-size: 14px;
+        font-weight: 600;
+        color: #0f172a;
         white-space: nowrap;
         overflow: hidden;
         text-overflow: ellipsis;
     }
     .store-meta {
         font-size: 12px;
-        color: #6b7280;
-        margin-top: 2px;
+        color: #94a3b8;
+        margin-top: 3px;
     }
     .badge {
         font-size: 11px;
-        padding: 3px 9px;
+        padding: 4px 10px;
         border-radius: 20px;
-        font-weight: 500;
+        font-weight: 600;
         white-space: nowrap;
         flex-shrink: 0;
+        letter-spacing: 0.02em;
     }
-    .badge-green { background: #dcfce7; color: #15803d; }
-    .badge-red   { background: #fee2e2; color: #b91c1c; }
-    .badge-blue  { background: #dbeafe; color: #1d4ed8; }
-    .badge-gray  { background: #f3f4f6; color: #6b7280; }
+    .badge-green  { background: #d1fae5; color: #065f46; }
+    .badge-red    { background: #fee2e2; color: #991b1b; }
+    .badge-blue   { background: #e0e7ff; color: #3730a3; }
+    .badge-gray   { background: #f1f5f9; color: #475569; }
+    .badge-purple { background: #ede9fe; color: #5b21b6; }
 
-    /* ── Upcoming timeline ── */
+    /* ══════════════════════════════════════
+       TIMELINE CARDS
+    ══════════════════════════════════════ */
     .timeline-card {
         background: #ffffff;
-        border: 1px solid #eaecf0;
-        border-radius: 12px;
-        padding: 1.1rem 1.25rem;
-        margin-bottom: 8px;
+        border: 1px solid #e2e8f0;
+        border-radius: 14px;
+        padding: 1.1rem 1.4rem;
+        margin-bottom: 10px;
         display: flex;
-        gap: 14px;
+        gap: 16px;
         align-items: flex-start;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.03);
+        transition: box-shadow 0.2s;
+    }
+    .timeline-card:hover {
+        box-shadow: 0 4px 14px rgba(0,0,0,0.07);
     }
     .date-badge {
-        width: 46px;
+        width: 50px;
         flex-shrink: 0;
         text-align: center;
-        background: #f9fafb;
-        border: 1px solid #eaecf0;
-        border-radius: 9px;
-        padding: 6px 4px;
+        background: #f8fafc;
+        border: 1px solid #e2e8f0;
+        border-radius: 12px;
+        padding: 8px 4px;
     }
     .date-badge.today {
-        background: #2563eb;
-        border-color: #2563eb;
+        background: linear-gradient(135deg, #6366f1, #8b5cf6);
+        border-color: transparent;
+        box-shadow: 0 4px 12px rgba(99,102,241,0.35);
     }
     .date-day {
-        font-size: 20px;
-        font-weight: 600;
-        color: #111827;
+        font-size: 22px;
+        font-weight: 700;
+        color: #0f172a;
         line-height: 1;
+        letter-spacing: -1px;
     }
     .date-month {
         font-size: 10px;
         text-transform: uppercase;
-        letter-spacing: 0.05em;
-        color: #9ca3af;
+        letter-spacing: 0.07em;
+        color: #94a3b8;
         margin-top: 2px;
+        font-weight: 600;
     }
     .date-badge.today .date-day,
     .date-badge.today .date-month { color: #ffffff; }
     .timeline-stores {
-        font-size: 13.5px;
-        font-weight: 500;
-        color: #111827;
+        font-size: 14px;
+        font-weight: 600;
+        color: #0f172a;
         margin-bottom: 2px;
     }
     .timeline-city {
         font-size: 12px;
-        color: #6b7280;
-        margin-bottom: 6px;
+        color: #94a3b8;
+        margin-bottom: 8px;
     }
     .pill-row { display: flex; flex-wrap: wrap; gap: 5px; }
     .pill {
         font-size: 11px;
-        background: #f3f4f6;
-        color: #4b5563;
-        padding: 2px 8px;
+        background: #f1f5f9;
+        color: #475569;
+        padding: 3px 9px;
         border-radius: 20px;
+        font-weight: 500;
     }
 
-    /* ── Login ── */
-    .login-wrap {
-        max-width: 400px;
-        margin: 3rem auto 0 auto;
+    /* ══════════════════════════════════════
+       LOGIN PAGE
+    ══════════════════════════════════════ */
+    .login-outer {
+        min-height: 100vh;
+        display: flex;
+        align-items: flex-start;
+        justify-content: center;
+        padding-top: 3.5rem;
     }
-    .login-logo {
+    .login-wrap {
+        max-width: 420px;
+        width: 100%;
+    }
+    .login-logo-wrap {
         text-align: center;
-        font-size: 20px;
-        font-weight: 600;
-        color: #111827;
-        margin-bottom: 4px;
+        margin-bottom: 1.75rem;
+    }
+    .login-logo-icon {
+        display: inline-flex;
+        width: 52px;
+        height: 52px;
+        border-radius: 15px;
+        background: linear-gradient(135deg, #6366f1, #8b5cf6);
+        align-items: center;
+        justify-content: center;
+        font-size: 26px;
+        margin-bottom: 10px;
+        box-shadow: 0 8px 24px rgba(99,102,241,0.3);
+    }
+    .login-logo-title {
+        font-size: 22px;
+        font-weight: 700;
+        color: #0f172a;
+        letter-spacing: -0.5px;
     }
     .login-tagline {
-        text-align: center;
-        font-size: 13px;
-        color: #6b7280;
-        margin-bottom: 1.75rem;
+        font-size: 13.5px;
+        color: #94a3b8;
+        margin-top: 4px;
     }
     .login-card {
         background: #ffffff;
-        border: 1px solid #eaecf0;
-        border-radius: 14px;
-        padding: 1.75rem;
+        border: 1px solid #e2e8f0;
+        border-radius: 20px;
+        padding: 2rem 2rem;
+        box-shadow: 0 8px 32px rgba(0,0,0,0.07);
     }
 
-    /* ── Buttons ── */
+    /* ══════════════════════════════════════
+       BUTTONS
+    ══════════════════════════════════════ */
     .stButton > button {
-        border-radius: 8px !important;
-        height: 40px !important;
-        font-weight: 500 !important;
+        border-radius: 10px !important;
+        height: 42px !important;
+        font-weight: 600 !important;
         font-size: 13.5px !important;
-        background: #2563eb !important;
+        background: linear-gradient(135deg, #6366f1, #8b5cf6) !important;
         color: #ffffff !important;
         border: none !important;
         letter-spacing: 0.1px !important;
+        box-shadow: 0 2px 8px rgba(99,102,241,0.25) !important;
+        transition: opacity 0.18s, transform 0.18s !important;
     }
     .stButton > button:hover {
-        background: #1d4ed8 !important;
+        opacity: 0.88 !important;
+        transform: translateY(-1px) !important;
+        box-shadow: 0 4px 14px rgba(99,102,241,0.35) !important;
+    }
+    .stButton > button:active {
+        transform: translateY(0) !important;
     }
     .stButton > button[kind="secondary"] {
-        background: #f9fafb !important;
+        background: #f8fafc !important;
         color: #374151 !important;
-        border: 1px solid #e5e7eb !important;
+        border: 1px solid #e2e8f0 !important;
+        box-shadow: none !important;
     }
 
-    /* ── Inputs ── */
+    /* ══════════════════════════════════════
+       INPUTS
+    ══════════════════════════════════════ */
     .stTextInput > div > div > input,
     .stSelectbox > div > div,
     .stMultiSelect > div > div {
-        border-radius: 8px !important;
-        border: 1px solid #e5e7eb !important;
+        border-radius: 10px !important;
+        border: 1.5px solid #e2e8f0 !important;
         font-size: 13.5px !important;
+        background: #ffffff !important;
+        transition: border-color 0.18s, box-shadow 0.18s !important;
+    }
+    .stTextInput > div > div > input:focus {
+        border-color: #818cf8 !important;
+        box-shadow: 0 0 0 3px rgba(99,102,241,0.12) !important;
     }
     .stDateInput > div > div > input {
-        border-radius: 8px !important;
-        border: 1px solid #e5e7eb !important;
+        border-radius: 10px !important;
+        border: 1.5px solid #e2e8f0 !important;
+    }
+    .stTextArea textarea {
+        border-radius: 10px !important;
+        border: 1.5px solid #e2e8f0 !important;
+        font-size: 13.5px !important;
     }
 
-    /* ── Tables ── */
+    /* ══════════════════════════════════════
+       TABLES
+    ══════════════════════════════════════ */
     .stDataFrame {
-        border-radius: 12px !important;
-        border: 1px solid #eaecf0 !important;
+        border-radius: 14px !important;
+        border: 1px solid #e2e8f0 !important;
         overflow: hidden !important;
+        box-shadow: 0 1px 4px rgba(0,0,0,0.04) !important;
     }
 
-    /* ── Tabs ── */
+    /* ══════════════════════════════════════
+       TABS
+    ══════════════════════════════════════ */
     .stTabs [data-baseweb="tab-list"] {
         gap: 4px;
-        background: #f3f4f6;
-        border-radius: 9px;
+        background: #f1f5f9;
+        border-radius: 12px;
         padding: 4px;
+        border: 1px solid #e2e8f0;
     }
     .stTabs [data-baseweb="tab"] {
-        border-radius: 7px;
+        border-radius: 9px;
         font-size: 13px;
-        font-weight: 500;
-        padding: 6px 16px;
-        color: #6b7280;
+        font-weight: 600;
+        padding: 7px 18px;
+        color: #94a3b8;
         background: transparent;
+        letter-spacing: 0.01em;
     }
     .stTabs [aria-selected="true"] {
         background: #ffffff !important;
-        color: #111827 !important;
-        border: 1px solid #e5e7eb !important;
+        color: #0f172a !important;
+        border: 1px solid #e2e8f0 !important;
+        box-shadow: 0 1px 4px rgba(0,0,0,0.06) !important;
     }
 
-    /* ── Info / warning / success ── */
+    /* ══════════════════════════════════════
+       ALERTS
+    ══════════════════════════════════════ */
     .stAlert {
-        border-radius: 10px !important;
+        border-radius: 12px !important;
         font-size: 13.5px !important;
     }
 
-    /* ── Download button ── */
+    /* ══════════════════════════════════════
+       DOWNLOAD BUTTON
+    ══════════════════════════════════════ */
     .stDownloadButton > button {
-        background: #f9fafb !important;
-        color: #374151 !important;
-        border: 1px solid #e5e7eb !important;
-        border-radius: 8px !important;
-        font-weight: 500 !important;
+        background: #f8fafc !important;
+        color: #475569 !important;
+        border: 1.5px solid #e2e8f0 !important;
+        border-radius: 10px !important;
+        font-weight: 600 !important;
+        box-shadow: none !important;
     }
     .stDownloadButton > button:hover {
-        background: #f3f4f6 !important;
+        background: #f1f5f9 !important;
+        border-color: #c7d2fe !important;
+        color: #4f46e5 !important;
     }
 
-    /* ── Divider ── */
-    hr { border-color: #eaecf0 !important; margin: 1.5rem 0 !important; }
+    /* ══════════════════════════════════════
+       DIVIDER & CAPTION
+    ══════════════════════════════════════ */
+    hr {
+        border-color: #e2e8f0 !important;
+        margin: 1.75rem 0 !important;
+    }
+    .stCaption, small {
+        color: #94a3b8 !important;
+        font-size: 12px !important;
+    }
 
-    /* ── Sidebar brand ── */
-    .sidebar-brand {
-        padding: 1.25rem 1rem 1rem 1rem;
-        border-bottom: 1px solid #eaecf0;
-        margin-bottom: 0.75rem;
+    /* ══════════════════════════════════════
+       STAT STRIP (thin highlight card)
+    ══════════════════════════════════════ */
+    .stat-strip {
+        display: flex;
+        gap: 12px;
+        margin-bottom: 1.5rem;
     }
-    .sidebar-brand-title {
-        font-size: 15px;
-        font-weight: 600;
-        color: #111827;
+    .stat-item {
+        flex: 1;
+        background: #ffffff;
+        border: 1px solid #e2e8f0;
+        border-radius: 14px;
+        padding: 1rem 1.25rem;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.03);
+        text-align: center;
     }
-    .sidebar-brand-role {
-        font-size: 11px;
-        color: #6b7280;
+    .stat-num {
+        font-size: 26px;
+        font-weight: 700;
+        color: #0f172a;
+        letter-spacing: -1px;
+    }
+    .stat-lbl {
+        font-size: 12px;
+        color: #94a3b8;
+        font-weight: 500;
         margin-top: 2px;
     }
-    .sidebar-section-label {
-        font-size: 10px;
-        text-transform: uppercase;
-        letter-spacing: 0.07em;
-        color: #9ca3af;
-        font-weight: 500;
-        padding: 0.75rem 1rem 0.25rem 1rem;
+
+    /* expander tweak */
+    .streamlit-expanderHeader {
+        font-size: 13.5px !important;
+        font-weight: 600 !important;
+        border-radius: 10px !important;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -638,7 +839,7 @@ def download_beat_plan_button(df, key, filename_prefix="Beat_Plan"):
             df.to_excel(writer, index=False, sheet_name="Beat Plan")
         output.seek(0)
         st.download_button(
-            label="⬇ Download as Excel",
+            label="⬇  Download Excel",
             data=output.getvalue(),
             file_name=f"{filename_prefix}_{date.today().strftime('%Y-%m-%d')}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -646,11 +847,11 @@ def download_beat_plan_button(df, key, filename_prefix="Beat_Plan"):
             key=key,
         )
 
-def render_metric(icon, label, value, trend_text=None, icon_bg="#eff6ff", icon_color="#2563eb"):
+def render_metric(icon, label, value, trend_text=None, icon_bg="#eef2ff", icon_color="#6366f1", card_class="metric-card-blue"):
     trend_html = f"<div class='metric-trend'>{trend_text}</div>" if trend_text else ""
     st.markdown(f"""
-        <div class='metric-card'>
-            <div class='metric-icon-wrap' style='background:{icon_bg};font-size:16px;color:{icon_color};'>{icon}</div>
+        <div class='metric-card {card_class}'>
+            <div class='metric-icon-wrap' style='background:{icon_bg};'><span style='color:{icon_color};font-size:17px;'>{icon}</span></div>
             <div class='metric-number'>{value}</div>
             <div class='metric-label'>{label}</div>
             {trend_html}
@@ -664,10 +865,10 @@ def render_topbar(title, subtitle, name=""):
             {name}
         </div>""" if name else ""
     st.markdown(f"""
-        <div class='brand-bar'>
+        <div class='topbar'>
             <div>
-                <div class='brand-title'>{title}</div>
-                <div class='brand-sub'>{subtitle}</div>
+                <div class='topbar-title'>{title}</div>
+                <div class='topbar-sub'>{subtitle}</div>
             </div>
             {chip_html}
         </div>""", unsafe_allow_html=True)
@@ -675,69 +876,77 @@ def render_topbar(title, subtitle, name=""):
 # ====================== LOGIN PAGE ======================
 if not st.session_state.logged_in:
 
-    st.markdown("<div class='login-wrap'>", unsafe_allow_html=True)
+    st.markdown("<div class='login-wrap' style='max-width:420px;margin:3rem auto 0 auto;'>", unsafe_allow_html=True)
+
     st.markdown("""
-        <div class='login-logo'>🗺️ Beat Plan Pro</div>
-        <div class='login-tagline'>Smart store visit planning system</div>
+        <div class='login-logo-wrap'>
+            <div class='login-logo-icon'>🗺️</div>
+            <div class='login-logo-title'>Beat Plan Pro</div>
+            <div class='login-tagline'>Smart store visit planning for field teams</div>
+        </div>
     """, unsafe_allow_html=True)
 
-    with st.container():
-        login_type = st.radio(
-            "Login as",
-            ["Admin", "Employee"],
-            horizontal=True,
-            label_visibility="collapsed",
-        )
+    st.markdown("<div class='login-card'>", unsafe_allow_html=True)
 
-        st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
+    login_type = st.radio(
+        "Login as",
+        ["👤  Admin", "🧑‍💼  Employee"],
+        horizontal=True,
+        label_visibility="collapsed",
+    )
 
-        if login_type == "Admin":
-            st.markdown("**Admin login**")
-            user = st.text_input("Username", placeholder="Enter username", key="admin_user")
-            pwd  = st.text_input("Password", type="password", placeholder="••••••••", key="admin_pwd")
-            if st.button("Sign in as Admin", type="primary", use_container_width=True):
-                if not user or not pwd:
-                    st.error("Please fill in both fields.")
+    st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
+
+    if "Admin" in login_type:
+        st.markdown("##### Sign in as Admin")
+        user = st.text_input("Username", placeholder="Enter your username", key="admin_user")
+        pwd  = st.text_input("Password", type="password", placeholder="••••••••", key="admin_pwd")
+        st.markdown("<div style='height:4px'></div>", unsafe_allow_html=True)
+        if st.button("Sign in →", type="primary", use_container_width=True):
+            if not user or not pwd:
+                st.error("Please fill in both fields.")
+            else:
+                df = st.session_state.admin_df.copy()
+                if "Username" not in df.columns or "Password" not in df.columns:
+                    st.error("admin_master columns missing.")
                 else:
-                    df = st.session_state.admin_df.copy()
-                    if "Username" not in df.columns or "Password" not in df.columns:
-                        st.error("admin_master columns missing.")
+                    match = (
+                        (df["Username"].astype(str).str.strip() == user.strip()) &
+                        (df["Password"].astype(str).str.strip() == pwd.strip())
+                    )
+                    if match.any():
+                        st.session_state.logged_in = True
+                        st.session_state.role = "admin"
+                        st.rerun()
                     else:
-                        match = (
-                            (df["Username"].astype(str).str.strip() == user.strip()) &
-                            (df["Password"].astype(str).str.strip() == pwd.strip())
-                        )
-                        if match.any():
-                            st.session_state.logged_in = True
-                            st.session_state.role = "admin"
-                            st.rerun()
-                        else:
-                            st.error(f"Invalid credentials. ({len(df)} admin record(s) found)")
-        else:
-            st.markdown("**Employee login**")
-            emp_in = st.text_input("Employee Code", placeholder="e.g. EMP001", key="emp_code_login")
-            pwd_in = st.text_input("Password", type="password", placeholder="••••••••", key="emp_pwd_login")
-            if st.button("Sign in as Employee", type="primary", use_container_width=True):
-                if not emp_in or not pwd_in:
-                    st.error("Please fill in both fields.")
+                        st.error(f"Invalid credentials. ({len(df)} admin record(s) found)")
+    else:
+        st.markdown("##### Sign in as Employee")
+        emp_in = st.text_input("Employee Code", placeholder="e.g. EMP001", key="emp_code_login")
+        pwd_in = st.text_input("Password", type="password", placeholder="••••••••", key="emp_pwd_login")
+        st.markdown("<div style='height:4px'></div>", unsafe_allow_html=True)
+        if st.button("Sign in →", type="primary", use_container_width=True):
+            if not emp_in or not pwd_in:
+                st.error("Please fill in both fields.")
+            else:
+                df = st.session_state.employee_df.copy()
+                if "EmployeeCode" not in df.columns or "Password" not in df.columns:
+                    st.error("employee_master columns missing.")
                 else:
-                    df = st.session_state.employee_df.copy()
-                    if "EmployeeCode" not in df.columns or "Password" not in df.columns:
-                        st.error("employee_master columns missing.")
+                    match = df[
+                        (df["EmployeeCode"].astype(str).str.strip() == emp_in.strip()) &
+                        (df["Password"].astype(str).str.strip()     == pwd_in.strip())
+                    ]
+                    if not match.empty:
+                        st.session_state.logged_in = True
+                        st.session_state.role      = "employee"
+                        st.session_state.emp_code  = str(match.iloc[0]["EmployeeCode"])
+                        st.session_state.emp_name  = match.iloc[0]["EmployeeName"]
+                        st.rerun()
                     else:
-                        match = df[
-                            (df["EmployeeCode"].astype(str).str.strip() == emp_in.strip()) &
-                            (df["Password"].astype(str).str.strip()     == pwd_in.strip())
-                        ]
-                        if not match.empty:
-                            st.session_state.logged_in = True
-                            st.session_state.role      = "employee"
-                            st.session_state.emp_code  = str(match.iloc[0]["EmployeeCode"])
-                            st.session_state.emp_name  = match.iloc[0]["EmployeeName"]
-                            st.rerun()
-                        else:
-                            st.error(f"Invalid credentials. ({len(df)} employee record(s) found)")
+                        st.error(f"Invalid credentials. ({len(df)} employee record(s) found)")
 
+    st.markdown("</div>", unsafe_allow_html=True)
     st.markdown("</div>", unsafe_allow_html=True)
     st.stop()
 
@@ -746,7 +955,10 @@ with st.sidebar:
     role_label = "Administrator" if st.session_state.role == "admin" else st.session_state.emp_name
     st.markdown(f"""
         <div class='sidebar-brand'>
-            <div class='sidebar-brand-title'>🗺️ Beat Plan Pro</div>
+            <div class='sidebar-logo-row'>
+                <div class='sidebar-logo-icon'>🗺️</div>
+                <div class='sidebar-brand-title'>Beat Plan Pro</div>
+            </div>
             <div class='sidebar-brand-role'>{role_label}</div>
         </div>
     """, unsafe_allow_html=True)
@@ -779,16 +991,16 @@ if st.session_state.role == "admin":
 
         cols = st.columns(4)
         metrics = [
-            ("👥", "Total employees",  len(st.session_state.employee_df), None,             "#eff6ff", "#2563eb"),
-            ("🏪", "Total stores",     len(st.session_state.gst_df),      None,             "#f0fdf4", "#16a34a"),
-            ("📋", "Total plans",      len(st.session_state.planned_df),  None,             "#fff7ed", "#d97706"),
-            ("📅", "Today's visits",   today_plans,                       None,             "#fdf2f8", "#9333ea"),
+            ("👥", "Total Employees",  len(st.session_state.employee_df), None, "#eef2ff", "#6366f1", "metric-card-blue"),
+            ("🏪", "Total Stores",     len(st.session_state.gst_df),      None, "#d1fae5", "#059669", "metric-card-green"),
+            ("📋", "Total Plans",      len(st.session_state.planned_df),  None, "#fef3c7", "#d97706", "metric-card-amber"),
+            ("📅", "Today's Visits",   today_plans,                       None, "#ede9fe", "#7c3aed", "metric-card-purple"),
         ]
-        for col, (icon, label, val, trend, bg, color) in zip(cols, metrics):
+        for col, (icon, label, val, trend, bg, color, cls) in zip(cols, metrics):
             with col:
-                render_metric(icon, label, val, trend, bg, color)
+                render_metric(icon, label, val, trend, bg, color, cls)
 
-        st.markdown("<div class='section-header'>Recent plans</div>", unsafe_allow_html=True)
+        st.markdown("<div class='section-header'>📋 Recent Plans</div>", unsafe_allow_html=True)
         if not st.session_state.planned_df.empty:
             st.dataframe(
                 st.session_state.planned_df.sort_values("VisitDate", ascending=False).head(10)
@@ -836,18 +1048,18 @@ if st.session_state.role == "admin":
                             [st.session_state.employee_df, new_row], ignore_index=True
                         )
                         if save_to_supabase("employee_master", st.session_state.employee_df):
-                            st.success("Employee added.")
+                            st.success("Employee added successfully.")
                             st.rerun()
 
         with tab3:
             if st.session_state.employee_df.empty:
-                st.info("No employees.")
+                st.info("No employees to delete.")
             else:
                 emp_del = st.selectbox(
-                    "Select employee to delete",
+                    "Select employee to remove",
                     safe_col(st.session_state.employee_df, "EmployeeCode").unique()
                 )
-                if st.button("Delete employee", type="primary"):
+                if st.button("Remove employee", type="primary"):
                     st.session_state.employee_df = st.session_state.employee_df[
                         safe_col(st.session_state.employee_df, "EmployeeCode") != emp_del
                     ]
@@ -903,13 +1115,13 @@ if st.session_state.role == "admin":
 
         with tab3:
             if st.session_state.gst_df.empty:
-                st.info("No stores.")
+                st.info("No stores to delete.")
             else:
                 sdel = st.selectbox(
-                    "Select store to delete",
+                    "Select store to remove",
                     safe_col(st.session_state.gst_df, "StoreID").unique()
                 )
-                if st.button("Delete store", type="primary"):
+                if st.button("Remove store", type="primary"):
                     st.session_state.gst_df = st.session_state.gst_df[
                         safe_col(st.session_state.gst_df, "StoreID") != sdel
                     ]
@@ -949,12 +1161,12 @@ if st.session_state.role == "admin":
     elif "Refresh" in admin_menu:
         render_topbar("Refresh Data", "Pull latest records from Supabase")
         st.info("Click below to sync the latest data from all tables.")
-        if st.button("Refresh now", type="primary", use_container_width=True):
+        if st.button("Refresh now →", type="primary", use_container_width=True):
             st.session_state.employee_df = load_from_supabase("employee_master", EMP_COLS)
             st.session_state.gst_df      = load_from_supabase("gst_master",      GST_COLS)
             st.session_state.planned_df  = load_from_supabase("planned_visits",  PLAN_COLS)
             st.session_state.admin_df    = load_from_supabase("admin_master",    ADMIN_COLS)
-            st.success("All data refreshed.")
+            st.success("All data refreshed successfully.")
             st.rerun()
 
 # ====================== EMPLOYEE PANEL ======================
@@ -976,7 +1188,7 @@ else:
 
     # ── New Beat Plan ───────────────────────────────────────
     if "New Beat Plan" in emp_menu:
-        render_topbar("New Beat Plan", f"Plan your store visits", name=emp_name)
+        render_topbar("New Beat Plan", f"Plan your store visits for the day", name=emp_name)
 
         if employee_stores.empty:
             st.warning("No stores are assigned to you yet. Contact your admin.")
@@ -987,10 +1199,10 @@ else:
             visit_date = st.date_input("Visit date", value=date.today(), key="beat_date")
         with c2:
             city_opts  = sorted(safe_col(employee_stores, "City").dropna().unique().tolist())
-            sel_cities = st.multiselect("Filter cities (up to 3)", city_opts, max_selections=3, key="city_ms")
+            sel_cities = st.multiselect("Filter by city (up to 3)", city_opts, max_selections=3, key="city_ms")
         with c3:
             st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
-            if st.button("Load stores", use_container_width=True):
+            if st.button("Load stores →", use_container_width=True):
                 st.session_state.selected_cities = sel_cities
 
         # Daily progress
@@ -1002,13 +1214,13 @@ else:
         pc        = len(daily_plans)
         bar_class = get_bar_class(pc, 10)
         bar_pct   = min(pc * 10, 100)
-        note      = "Daily limit of 10 reached." if pc >= 10 else f"{10 - pc} more store(s) can be added today."
+        note      = "🚫 Daily limit of 10 reached." if pc >= 10 else f"✅ {10 - pc} more store(s) can be added today."
 
         st.markdown(f"""
             <div class='progress-wrap'>
                 <div class='progress-row'>
                     <span class='progress-title'>Today's progress</span>
-                    <span class='progress-fraction'><strong>{pc}</strong> / 10 stores</span>
+                    <span class='progress-fraction'><strong>{pc}</strong> / 10 stores planned</span>
                 </div>
                 <div class='bar-bg'>
                     <div class='bar-fill {bar_class}' style='width:{bar_pct}%'></div>
@@ -1017,7 +1229,7 @@ else:
             </div>""", unsafe_allow_html=True)
 
         if not daily_plans.empty:
-            with st.expander(f"Already planned for {visit_date} — {pc} store(s)"):
+            with st.expander(f"📋 Already planned for {visit_date} — {pc} store(s)"):
                 show = [c for c in ["Store", "City", "GSTNumber"] if c in daily_plans.columns]
                 st.dataframe(daily_plans[show], use_container_width=True, hide_index=True)
 
@@ -1028,7 +1240,7 @@ else:
             available   = city_stores[~safe_col(city_stores, "StoreID").isin(planned_ids)]
 
             st.markdown(
-                f"<div class='section-header'>Available stores <span class='section-count'>{len(available)}</span></div>",
+                f"<div class='section-header'>🏪 Available Stores <span class='section-count'>{len(available)}</span></div>",
                 unsafe_allow_html=True
             )
 
@@ -1044,8 +1256,8 @@ else:
                                 <div class='store-info'>
                                     <div class='store-name'>{row.get('StoreName', '—')}</div>
                                     <div class='store-meta'>
-                                        {row.get('StoreID', '—')} &nbsp;·&nbsp;
-                                        {row.get('City', '—')} &nbsp;·&nbsp;
+                                        <strong>{row.get('StoreID', '—')}</strong> &nbsp;·&nbsp;
+                                        📍 {row.get('City', '—')} &nbsp;·&nbsp;
                                         GST: {row.get('GSTNumber', '—')}
                                     </div>
                                 </div>
@@ -1053,7 +1265,7 @@ else:
                             </div>""", unsafe_allow_html=True)
                     with col2:
                         st.markdown("<div style='height:22px'></div>", unsafe_allow_html=True)
-                        if st.button("+ Add", key=f"add_{idx}_{visit_date}"):
+                        if st.button("＋ Add", key=f"add_{idx}_{visit_date}"):
                             new_plan = pd.DataFrame([{
                                 "EmployeeCode": emp_code,
                                 "EmployeeName": emp_name,
@@ -1067,7 +1279,7 @@ else:
                                 [st.session_state.planned_df, new_plan], ignore_index=True
                             )
                             if save_to_supabase("planned_visits", st.session_state.planned_df):
-                                st.success(f"{row.get('StoreName', '')} added to your plan.")
+                                st.success(f"✓ {row.get('StoreName', '')} added to your plan.")
                                 st.rerun()
 
         st.markdown("---")
@@ -1084,15 +1296,15 @@ else:
             safe_col(st.session_state.planned_df, "EmployeeCode").astype(str) == str(emp_code)
         ]
         if my.empty:
-            st.info("You haven't created any plans yet.")
+            st.info("You haven't created any plans yet. Start by creating a New Beat Plan.")
         else:
-            c1, c2, c3 = st.columns(3)
-            with c1:
-                render_metric("📋", "Total plans",   len(my),                                   None, "#eff6ff", "#2563eb")
-            with c2:
-                render_metric("🌍", "Cities covered", safe_col(my, "City").nunique(),            None, "#f0fdf4", "#16a34a")
-            with c3:
-                render_metric("📅", "Unique dates",   len(safe_col(my, "VisitDate").unique()),   None, "#fff7ed", "#d97706")
+            cols = st.columns(3)
+            with cols[0]:
+                render_metric("📋", "Total Plans",    len(my),                                  None, "#eef2ff", "#6366f1", "metric-card-blue")
+            with cols[1]:
+                render_metric("🌍", "Cities Covered", safe_col(my, "City").nunique(),           None, "#d1fae5", "#059669", "metric-card-green")
+            with cols[2]:
+                render_metric("📅", "Unique Dates",   len(safe_col(my, "VisitDate").unique()),  None, "#fef3c7", "#d97706", "metric-card-amber")
 
             st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
             st.dataframe(
@@ -1114,7 +1326,7 @@ else:
             ].sort_values("VisitDate")
 
             if upcoming.empty:
-                st.info("No upcoming visits scheduled.")
+                st.info("No upcoming visits scheduled. Plan your next beat!")
             else:
                 for vdate in sorted(upcoming["VisitDate"].unique()):
                     plans      = upcoming[upcoming["VisitDate"] == vdate]
@@ -1139,7 +1351,7 @@ else:
                             </div>
                             <div>
                                 <div class='timeline-stores'>{len(plans)} store(s) planned</div>
-                                <div class='timeline-city'>{cities}</div>
+                                <div class='timeline-city'>📍 {cities}</div>
                                 <div class='pill-row'>{pills_html}</div>
                             </div>
                         </div>""", unsafe_allow_html=True)
@@ -1152,37 +1364,37 @@ else:
             safe_col(st.session_state.planned_df, "EmployeeCode").astype(str) == str(emp_code)
         ]
         if my.empty:
-            st.info("No data to display yet.")
+            st.info("No data to display yet. Create your first beat plan to see analytics.")
         else:
             tm = my[pd.to_datetime(safe_col(my, "VisitDate"), errors="coerce").dt.month == date.today().month] \
                 if "VisitDate" in my.columns else pd.DataFrame()
 
             c1, c2, c3, c4 = st.columns(4)
             with c1:
-                render_metric("📋", "Total visits",  len(my),                             None, "#eff6ff", "#2563eb")
+                render_metric("📋", "Total Visits",   len(my),                          None, "#eef2ff", "#6366f1", "metric-card-blue")
             with c2:
-                render_metric("🌍", "Cities",         safe_col(my, "City").nunique(),     None, "#f0fdf4", "#16a34a")
+                render_metric("🌍", "Cities",          safe_col(my, "City").nunique(),  None, "#d1fae5", "#059669", "metric-card-green")
             with c3:
-                render_metric("🏪", "Unique stores",  safe_col(my, "Store").nunique(),    None, "#fff7ed", "#d97706")
+                render_metric("🏪", "Unique Stores",   safe_col(my, "Store").nunique(), None, "#fef3c7", "#d97706", "metric-card-amber")
             with c4:
-                render_metric("📅", "This month",     len(tm),                             None, "#fdf2f8", "#9333ea")
+                render_metric("📅", "This Month",      len(tm),                          None, "#ede9fe", "#7c3aed", "metric-card-purple")
 
             st.markdown("---")
             c1, c2 = st.columns(2)
             with c1:
-                st.markdown("<div class='section-header'>Visits by city</div>", unsafe_allow_html=True)
+                st.markdown("<div class='section-header'>📊 Visits by City</div>", unsafe_allow_html=True)
                 if "City" in my.columns:
-                    st.bar_chart(my.groupby("City").size(), color="#2563eb")
+                    st.bar_chart(my.groupby("City").size(), color="#6366f1")
             with c2:
-                st.markdown("<div class='section-header'>Visits over time</div>", unsafe_allow_html=True)
+                st.markdown("<div class='section-header'>📈 Visits Over Time</div>", unsafe_allow_html=True)
                 if "VisitDate" in my.columns:
                     tmp = my.copy()
                     tmp["Month"] = pd.to_datetime(tmp["VisitDate"], errors="coerce").dt.to_period("M").astype(str)
-                    st.line_chart(tmp.groupby("Month").size(), color="#16a34a")
+                    st.line_chart(tmp.groupby("Month").size(), color="#10b981")
 
     # ── Add Store ──────────────────────────────────────────
     elif "Add Store" in emp_menu:
-        render_topbar("Add New Store", "Request a store to be added to your territory", name=emp_name)
+        render_topbar("Add New Store", "Add a store to your territory", name=emp_name)
 
         with st.form("store_req"):
             c1, c2 = st.columns(2)
@@ -1191,8 +1403,8 @@ else:
                 city  = st.text_input("City *",       placeholder="e.g. Lucknow")
             with c2:
                 gst = st.text_input("GST Number *", max_chars=15, placeholder="22AAAAA0000A1Z5")
-                st.text_area("Remarks (optional)", height=100, placeholder="Any notes for admin...")
-            if st.form_submit_button("Add store", type="primary"):
+                st.text_area("Remarks (optional)", height=100, placeholder="Any notes...")
+            if st.form_submit_button("Add store →", type="primary"):
                 gc = gst.strip().upper()
                 if not sname or not city or not gc:
                     st.error("All fields are required.")
@@ -1213,7 +1425,7 @@ else:
                         [st.session_state.gst_df, new_store], ignore_index=True
                     )
                     if save_to_supabase("gst_master", st.session_state.gst_df):
-                        st.success(f"'{sname.title()}' has been added to your territory.")
+                        st.success(f"✓ '{sname.title()}' has been added to your territory.")
                         st.rerun()
 
 # ====================== FOOTER ======================
