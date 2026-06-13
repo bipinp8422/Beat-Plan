@@ -1313,7 +1313,6 @@ st.markdown("</div>", unsafe_allow_html=True)  # close desktop-page
 
 # ====================== FOOTER ======================
 st.markdown("""
-<div style='text-align:center;font-size:12px;color:#c4c9d9;padding:20px 0 80px;'>
+<div style='text-align:center;font-size:12px;color:#c4c9d9;padding:16px 0 90px;'>
     Beat Plan Pro · 2026 · Built by Bipin Pandey
-
-Done
+</div>""", unsafe_allow_html=True)Done
