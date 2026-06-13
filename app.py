@@ -477,33 +477,85 @@ def download_btn(df, key, prefix="Beat_Plan"):
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             use_container_width=True, key=key)
 
-def render_nav(name, role, page):
-    nav = ["Dashboard","Employees","Stores","View Plans","Refresh"] if role=="admin" \
-          else ["Dashboard","Beat Plan","My Plans","Upcoming","Analytics","Add Store"]
+def render_nav(name, role, page, nav_pages):
     icons = {
         "Dashboard":"📊","Employees":"👥","Stores":"🏪","View Plans":"📋","Refresh":"🔄",
         "Beat Plan":"🎯","My Plans":"📅","Upcoming":"📆","Analytics":"📈","Add Store":"➕"
     }
-    ini = get_initials(name) if name else "??"
+    ini      = get_initials(name) if name else "??"
     role_lbl = "Admin" if role=="admin" else "Field Rep"
-    btns = "".join(
-        f'<button class="tn-btn{" active" if page==p else ""}">{icons.get(p,"")} {p}</button>'
-        for p in nav
-    )
+
+    # Brand + user chip (HTML only — purely decorative)
     st.markdown(f"""
-    <div class="topnav">
-        <div class="tn-logo">
-            <div class="tn-icon">🗺️</div>Beat Plan Pro
+    <div style="display:flex;align-items:center;justify-content:space-between;
+                background:#fff;border:1px solid #e2e5ef;border-radius:18px;
+                padding:10px 22px;margin-bottom:8px;
+                box-shadow:0 2px 14px rgba(0,0,0,.05);">
+        <div style="display:flex;align-items:center;gap:9px;font-size:15px;
+                    font-weight:800;color:#18181b;letter-spacing:-0.3px;">
+            <div style="width:32px;height:32px;border-radius:9px;
+                        background:linear-gradient(135deg,#4f46e5,#7c3aed);
+                        display:flex;align-items:center;justify-content:center;
+                        font-size:16px;box-shadow:0 2px 8px rgba(79,70,229,.28);">🗺️</div>
+            Beat Plan Pro
         </div>
-        <div class="tn-links">{btns}</div>
-        <div class="tn-right">
-            <div class="tn-avatar">{ini}</div>
-            <div>
-                <div class="tn-uname">{name}</div>
-            </div>
-            <span class="tn-role">{role_lbl}</span>
+        <div style="display:flex;align-items:center;gap:9px;">
+            <div style="width:34px;height:34px;border-radius:50%;
+                        background:linear-gradient(135deg,#4f46e5,#06b6d4);
+                        color:#fff;font-size:12px;font-weight:700;
+                        display:flex;align-items:center;justify-content:center;
+                        box-shadow:0 2px 8px rgba(79,70,229,.25);">{ini}</div>
+            <div style="font-size:13px;font-weight:600;color:#374151;">{name}</div>
+            <span style="font-size:10.5px;padding:2px 9px;border-radius:20px;
+                         font-weight:600;background:#eef2ff;color:#4338ca;">{role_lbl}</span>
         </div>
     </div>""", unsafe_allow_html=True)
+
+    # Real nav buttons in a styled row
+    st.markdown("""
+    <style>
+    /* Nav button row wrapper */
+    div[data-testid="stHorizontalBlock"].nav-row > div {
+        flex: 0 0 auto !important;
+    }
+    /* Style all nav buttons */
+    .nav-row .stButton > button {
+        background: transparent !important;
+        color: #6b7280 !important;
+        border: 1px solid #e2e5ef !important;
+        border-radius: 10px !important;
+        height: 38px !important;
+        font-size: 13px !important;
+        font-weight: 500 !important;
+        box-shadow: none !important;
+        padding: 0 14px !important;
+    }
+    .nav-row .stButton > button:hover {
+        background: #f4f6fb !important;
+        color: #374151 !important;
+        transform: none !important;
+        box-shadow: none !important;
+    }
+    </style>""", unsafe_allow_html=True)
+
+    nav_cols = st.columns(len(nav_pages) + 2)
+    for i, p in enumerate(nav_pages):
+        with nav_cols[i]:
+            label = f"{icons.get(p,'')} {p}"
+            # Active page button gets filled style via extra CSS class trick
+            if page == p:
+                st.markdown(f"""
+                <style>
+                div[data-testid="stHorizontalBlock"] > div:nth-child({i+1}) .stButton > button {{
+                    background: #4f46e5 !important;
+                    color: #fff !important;
+                    border-color: #4f46e5 !important;
+                    font-weight: 700 !important;
+                    box-shadow: 0 2px 8px rgba(79,70,229,.28) !important;
+                }}
+                </style>""", unsafe_allow_html=True)
+            if st.button(label, key=f"nav_{p}", use_container_width=True):
+                go(p)
 
 def stat_cards(items):
     html = "<div class='stats-grid'>"
@@ -606,19 +658,13 @@ emp_code = st.session_state.emp_code
 emp_name = st.session_state.emp_name
 page     = st.session_state.page
 
-render_nav(emp_name, role, page)
-
-# ── Nav buttons (hidden visual, drive page switching) ────
 if role == "admin":
     nav_pages = ["Dashboard","Employees","Stores","View Plans","Refresh"]
 else:
     nav_pages = ["Dashboard","Beat Plan","My Plans","Upcoming","Analytics","Add Store"]
 
-nav_cols = st.columns(len(nav_pages)+3)
-for i, p in enumerate(nav_pages):
-    with nav_cols[i]:
-        if st.button(p, key=f"nav_{p}", use_container_width=True):
-            go(p)
+# ── Single top nav bar with real Streamlit buttons ───────
+render_nav(emp_name, role, page, nav_pages)
 
 # Sidebar: sign out
 with st.sidebar:
