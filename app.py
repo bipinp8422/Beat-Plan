@@ -4,6 +4,7 @@ from datetime import date, timedelta
 import re
 import io
 from supabase import create_client, Client
+import json
 
 # ====================== PAGE CONFIG ======================
 st.set_page_config(
@@ -12,6 +13,23 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="auto"
 )
+
+# ====================== DEVICE DETECTION ======================
+st.markdown("""
+<script>
+window.deviceType = (function() {
+    const ua = navigator.userAgent;
+    const isTablet = /iPad|Android(?!.*Mobile)|Tablet/i.test(ua);
+    const isMobile = /Mobile|iPhone|Android|Opera Mini/i.test(ua);
+    const isLandscape = window.innerWidth > window.innerHeight;
+    
+    if (isMobile && !isTablet) return 'mobile';
+    if (isTablet) return 'tablet';
+    return 'desktop';
+})();
+window.isLandscape = window.innerWidth > window.innerHeight;
+</script>
+""", unsafe_allow_html=True)
 
 # ====================== SUPABASE CONFIG ======================
 SUPABASE_URL = "https://kueicdruccvbempjvxzn.supabase.co"
@@ -23,7 +41,7 @@ except Exception as e:
     st.error(f"❌ Failed to connect to Supabase: {e}")
     st.stop()
 
-# ====================== RESPONSIVE STYLING ======================
+# ====================== COMPREHENSIVE RESPONSIVE STYLING ======================
 st.markdown("""
 <style>
     * {
@@ -32,47 +50,190 @@ st.markdown("""
         box-sizing: border-box;
     }
     
+    html, body, .stApp {
+        width: 100%;
+        height: 100%;
+        overflow-x: hidden;
+    }
+    
     .stApp { 
         background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%);
         max-width: 100%;
     }
     
-    /* Mobile-first responsive */
-    @media (max-width: 768px) {
+    /* ===== DESKTOP (1024px+) ===== */
+    @media (min-width: 1024px) {
         [data-testid="stMainBlockContainer"] {
-            padding: 8px !important;
+            padding: 24px !important;
+            max-width: 1400px;
         }
-        .stTabs [data-baseweb="tab"] {
-            padding: 12px 16px !important;
+        
+        .main-header {
+            font-size: 48px;
+            margin: 20px 0 10px 0;
+        }
+        
+        .sub-header {
+            font-size: 16px;
+            margin-bottom: 30px;
+        }
+        
+        .metric-card {
+            padding: 24px;
+            margin-bottom: 16px;
+        }
+        
+        .store-card {
+            padding: 20px;
+            margin-bottom: 12px;
+        }
+        
+        .metrics-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 16px;
+        }
+        
+        [data-testid="stRadio"] {
+            flex-direction: row;
+            gap: 20px;
         }
     }
     
+    /* ===== TABLET (768px - 1023px) ===== */
+    @media (min-width: 768px) and (max-width: 1023px) {
+        [data-testid="stMainBlockContainer"] {
+            padding: 16px !important;
+        }
+        
+        .main-header {
+            font-size: 36px;
+            margin: 16px 0 8px 0;
+        }
+        
+        .sub-header {
+            font-size: 15px;
+            margin-bottom: 20px;
+        }
+        
+        .metric-card {
+            padding: 18px;
+            margin-bottom: 12px;
+        }
+        
+        .store-card {
+            padding: 16px;
+            margin-bottom: 10px;
+        }
+        
+        .metrics-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 12px;
+        }
+        
+        [data-testid="stRadio"] {
+            flex-direction: row;
+            gap: 12px;
+            flex-wrap: wrap;
+        }
+    }
+    
+    /* ===== MOBILE (max 767px) ===== */
+    @media (max-width: 767px) {
+        [data-testid="stMainBlockContainer"] {
+            padding: 8px !important;
+        }
+        
+        [data-testid="stSidebar"] {
+            width: 100% !important;
+        }
+        
+        .main-header {
+            font-size: 28px;
+            margin: 12px 0 6px 0;
+            line-height: 1.2;
+        }
+        
+        .sub-header {
+            font-size: 13px;
+            margin-bottom: 16px;
+        }
+        
+        .metric-card {
+            padding: 14px;
+            margin-bottom: 10px;
+        }
+        
+        .store-card {
+            padding: 14px;
+            margin-bottom: 10px;
+        }
+        
+        .metrics-grid {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 8px;
+        }
+        
+        .stTabs [data-baseweb="tab"] {
+            padding: 10px 12px !important;
+            font-size: 12px !important;
+        }
+        
+        [data-testid="stRadio"] {
+            flex-direction: column;
+            gap: 10px;
+        }
+        
+        /* Stack form inputs vertically */
+        .stSelectbox, .stTextInput, .stDateInput, .stMultiSelect {
+            margin-bottom: 8px !important;
+        }
+    }
+    
+    /* ===== LANDSCAPE MODE (max-height: 600px) ===== */
+    @media (orientation: landscape) and (max-height: 600px) {
+        .main-header {
+            font-size: 20px !important;
+            margin: 4px 0 !important;
+        }
+        
+        .sub-header {
+            display: none;
+        }
+        
+        [data-testid="stMainBlockContainer"] {
+            padding: 4px !important;
+        }
+        
+        .metric-card, .store-card {
+            padding: 8px !important;
+            margin-bottom: 4px !important;
+        }
+    }
+    
+    /* ===== UNIVERSAL STYLES ===== */
     .main-header {
-        font-size: clamp(28px, 8vw, 48px);
         font-weight: 900;
         background: linear-gradient(90deg, #0066cc, #00a8e8, #00d4ff);
         -webkit-background-clip: text;
         -webkit-text-fill-color: transparent;
         text-align: center;
-        margin: 12px 0 6px 0;
         letter-spacing: -1px;
     }
     
     .sub-header {
         text-align: center;
         color: #475569;
-        font-size: clamp(13px, 4vw, 16px);
-        margin-bottom: 20px;
         font-weight: 600;
     }
     
     .metric-card {
         background: linear-gradient(135deg, #ffffff 0%, #f8fafc 100%);
-        padding: 16px;
         border-radius: 12px;
         border: 2px solid #e2e8f0;
         box-shadow: 0 2px 8px rgba(0,0,0,0.06);
-        margin-bottom: 12px;
         transition: all 0.3s ease;
     }
     
@@ -83,12 +244,10 @@ st.markdown("""
     
     .store-card {
         background: linear-gradient(135deg, #ffffff 0%, #f8fafc 100%);
-        padding: 16px;
         border-radius: 12px;
         border-left: 4px solid #0066cc;
         border: 2px solid #e2e8f0;
         box-shadow: 0 2px 8px rgba(0,0,0,0.06);
-        margin-bottom: 12px;
         transition: all 0.3s ease;
     }
     
@@ -106,97 +265,63 @@ st.markdown("""
     }
     
     .metric-value {
-        font-size: clamp(24px, 6vw, 36px);
         font-weight: 800;
         background: linear-gradient(135deg, #0066cc, #00a8e8);
         -webkit-background-clip: text;
         -webkit-text-fill-color: transparent;
         margin-top: 8px;
+        font-size: clamp(20px, 6vw, 36px);
     }
     
     .metric-label {
         color: #64748b;
-        font-size: clamp(12px, 3vw, 14px);
         font-weight: 600;
         margin-bottom: 6px;
+        font-size: clamp(11px, 3vw, 14px);
     }
     
+    .icon {
+        font-size: clamp(20px, 8vw, 32px);
+        margin-bottom: 8px;
+    }
+    
+    /* ===== BUTTONS ===== */
     .stButton > button {
         border-radius: 10px;
-        height: auto !important;
         min-height: 44px;
         font-weight: 700;
         background: linear-gradient(90deg, #0066cc, #00a8e8) !important;
         color: white !important;
         border: none !important;
-        font-size: clamp(13px, 3vw, 14px) !important;
+        font-size: clamp(12px, 3vw, 14px) !important;
         width: 100%;
         touch-action: manipulation;
+        transition: all 0.2s ease;
     }
     
-    .stButton > button:hover {
-        background: linear-gradient(90deg, #0052a3, #008cb8) !important;
+    .stButton > button:active {
+        transform: scale(0.95);
     }
     
-    /* Tab styling for mobile */
-    [data-baseweb="tab"] {
-        font-size: clamp(12px, 3vw, 14px) !important;
-        padding: 12px 16px !important;
-    }
-    
-    /* Input fields mobile friendly */
+    /* ===== INPUT FIELDS ===== */
     .stTextInput > div > div > input,
     .stSelectbox > div > div > select,
     .stMultiSelect > div > div > select,
-    .stDateInput > div > div > input {
-        font-size: 16px !important; /* Prevents zoom on iOS */
-        padding: 12px !important;
-        border-radius: 8px !important;
-        border: 2px solid #e2e8f0 !important;
-        min-height: 44px !important;
-    }
-    
+    .stDateInput > div > div > input,
     .stTextArea > div > div > textarea {
         font-size: 16px !important;
         padding: 12px !important;
         border-radius: 8px !important;
         border: 2px solid #e2e8f0 !important;
-        min-height: 120px !important;
+        min-height: 44px !important;
+        width: 100% !important;
     }
     
-    /* Radio button mobile friendly */
-    [data-testid="stRadio"] {
-        gap: 12px !important;
+    .stTextArea > div > div > textarea {
+        min-height: 100px !important;
     }
     
-    [data-testid="stRadio"] > label {
-        font-size: clamp(13px, 3vw, 14px) !important;
-        padding: 12px !important;
-        cursor: pointer;
-    }
-    
-    /* Expander mobile friendly */
-    [data-testid="stExpander"] {
-        border-radius: 8px !important;
-    }
-    
-    .login-container {
-        max-width: 100%;
-        padding: 16px;
-    }
-    
-    .icon {
-        font-size: clamp(24px, 8vw, 32px);
-        margin-bottom: 8px;
-    }
-    
-    /* Navigation menu */
-    .nav-menu {
-        display: flex;
-        flex-direction: column;
-        gap: 8px;
-    }
-    
+    /* ===== INFO BOXES ===== */
     .info-box {
         background: #f0f9ff;
         border-left: 4px solid #0066cc;
@@ -233,16 +358,21 @@ st.markdown("""
         margin-bottom: 12px;
     }
     
-    /* Landscape mode adjustments */
-    @media (orientation: landscape) and (max-height: 500px) {
-        .main-header { margin: 4px 0; font-size: 24px; }
-        .sub-header { margin-bottom: 10px; }
-        [data-testid="stMainBlockContainer"] { padding: 4px !important; }
-    }
-    
-    /* Dataframe scrolling */
+    /* ===== DATAFRAME ===== */
     [data-testid="dataFrameContainer"] {
         font-size: clamp(11px, 2.5vw, 13px) !important;
+        overflow-x: auto;
+    }
+    
+    /* ===== EXPANDER ===== */
+    [data-testid="stExpander"] {
+        border-radius: 8px !important;
+    }
+    
+    /* ===== TABS ===== */
+    [data-baseweb="tab"] {
+        font-size: clamp(12px, 3vw, 14px) !important;
+        padding: 12px 16px !important;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -357,7 +487,6 @@ if "planned_df" not in st.session_state:
 if "admin_df" not in st.session_state:
     st.session_state.admin_df = load_from_supabase("admin_master", ADMIN_COLS)
 
-# ====================== SESSION STATE ======================
 for k, v in {"logged_in": False, "role": "", "emp_code": "", "emp_name": "", "selected_cities": []}.items():
     if k not in st.session_state:
         st.session_state[k] = v
@@ -380,7 +509,7 @@ def download_beat_plan_button(df, key, filename_prefix="Beat_Plan"):
             df.to_excel(writer, index=False, sheet_name="Beat Plan")
         output.seek(0)
         st.download_button(
-            label="📥 Download (Excel)",
+            label="📥 Download Excel",
             data=output.getvalue(),
             file_name=f"{filename_prefix}_{date.today().strftime('%Y-%m-%d')}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -401,7 +530,7 @@ if not st.session_state.logged_in:
             st.markdown("### Admin Login")
             with st.form("admin_login_form"):
                 user = st.text_input("👤 Username", placeholder="Enter username", key="admin_user")
-                pwd  = st.text_input("🔒 Password", type="password", placeholder="Enter password", key="admin_pwd")
+                pwd  = st.text_input("🔒 Password", type="password", placeholder="••••••••", key="admin_pwd")
                 submit = st.form_submit_button("🔓 Login", type="primary", use_container_width=True)
                 
                 if submit:
@@ -426,7 +555,7 @@ if not st.session_state.logged_in:
             st.markdown("### Employee Login")
             with st.form("emp_login_form"):
                 emp_in = st.text_input("🏷️ Employee Code", placeholder="Enter code", key="emp_code_login")
-                pwd_in = st.text_input("🔒 Password", type="password", placeholder="Enter password", key="emp_pwd_login")
+                pwd_in = st.text_input("🔒 Password", type="password", placeholder="••••••••", key="emp_pwd_login")
                 submit = st.form_submit_button("🔓 Login", type="primary", use_container_width=True)
                 
                 if submit:
@@ -473,7 +602,7 @@ if st.session_state.role == "admin":
         today_plans = int((st.session_state.planned_df["VisitDate"] == date.today()).sum()) \
             if "VisitDate" in st.session_state.planned_df.columns else 0
 
-        cols = st.columns(2)
+        cols = st.columns([1, 1])
         metrics = [
             ("👥", "Employees", len(st.session_state.employee_df)),
             ("🏪", "Stores",    len(st.session_state.gst_df)),
@@ -603,7 +732,7 @@ if st.session_state.role == "admin":
 
     elif admin_menu == "🔄 Refresh":
         st.subheader("Sync Data")
-        st.markdown("Pull latest data from database.", unsafe_allow_html=True)
+        st.markdown("Pull latest data from database.")
         if st.button("🔄 Refresh Now", type="primary", use_container_width=True):
             st.session_state.employee_df = load_from_supabase("employee_master", EMP_COLS)
             st.session_state.gst_df      = load_from_supabase("gst_master",      GST_COLS)
@@ -655,8 +784,8 @@ else:
         st.markdown(f"""
             <div class='progress-section'>
                 <div style='display:flex;justify-content:space-between;margin-bottom:10px;'>
-                    <span style='font-weight:700;font-size:16px;'>Progress</span>
-                    <span style='font-weight:800;color:{pcol};font-size:18px;'>{pc}/10</span>
+                    <span style='font-weight:700;'>Progress</span>
+                    <span style='font-weight:800;color:{pcol};'>{pc}/10</span>
                 </div>
                 <div style='height:12px;background:#e2e8f0;border-radius:10px;overflow:hidden;'>
                     <div style='width:{min(pc*10,100)}%;height:100%;background:{pcol};transition:width 0.3s;'></div>
@@ -801,6 +930,5 @@ else:
                     if save_to_supabase("gst_master", st.session_state.gst_df):
                         st.success(f"✅ {sname.title()} added!"); st.rerun()
 
-# ====================== FOOTER ======================
 st.markdown("---")
-st.caption("Beat Plan Pro © 2026 | Created by Bipin Pandey | Mobile Optimized v2.0")
+st.caption("Beat Plan Pro © 2026 | Created by Bipin Pandey | Fully Responsive v2.1")
