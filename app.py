@@ -381,70 +381,208 @@ def ib(msg): st.markdown(f"<div class='ib'>ℹ️  {msg}</div>",unsafe_allow_htm
 def wb(msg): st.markdown(f"<div class='wb'>⚠️  {msg}</div>",unsafe_allow_html=True)
 def phdr(t,s=""): st.markdown(f"<div class='pt'>{t}</div>{'<div class=ps>'+s+'</div>' if s else ''}",unsafe_allow_html=True)
 
-def render_shell(name,role,page):
-    av=ini(name); rl="Admin" if role=="admin" else "Employee"
-    emp_nav=["Home","Beat Plan","My Plans","Upcoming","Analytics"]
-    adm_nav=["Home","Employees","Stores","View Plans","Refresh"]
-    nav=adm_nav if role=="admin" else emp_nav
-    icons={"Home":"🏠","Beat Plan":"🎯","My Plans":"📅","Upcoming":"📆",
-           "Analytics":"📈","Employees":"👥","Stores":"🏪","View Plans":"📋","Refresh":"🔄"}
+def render_shell(name, role, page):
+    av  = ini(name)
+    rl  = "Admin" if role == "admin" else "Employee"
+    emp_nav = ["Home","Beat Plan","My Plans","Upcoming","Analytics"]
+    adm_nav = ["Home","Employees","Stores","View Plans","Refresh"]
+    nav = adm_nav if role == "admin" else emp_nav
+    icons = {
+        "Home":"🏠","Beat Plan":"🎯","My Plans":"📅","Upcoming":"📆",
+        "Analytics":"📈","Employees":"👥","Stores":"🏪","View Plans":"📋","Refresh":"🔄"
+    }
+    n = len(nav)
 
-    # Desktop top nav
-    btns="".join(f'<button class="dn-btn{" active" if page==p else ""}">{icons.get(p,"")} {p}</button>' for p in nav)
+    # Build per-button styles so active = filled indigo, others = ghost
+    btn_styles = ""
+    for i, p in enumerate(nav):
+        sel = f"div[data-testid='stHorizontalBlock'] > div:nth-child({i+2}) .stButton > button"
+        if p == page:
+            btn_styles += f"""
+            {sel} {{
+                background:#4f46e5!important; color:#fff!important;
+                border:1px solid #4f46e5!important;
+                box-shadow:0 2px 8px rgba(79,70,229,.28)!important;
+                font-weight:700!important;
+            }}"""
+        else:
+            btn_styles += f"""
+            {sel} {{
+                background:transparent!important; color:#6b7280!important;
+                border:1px solid #e2e5ef!important;
+                box-shadow:none!important; font-weight:500!important;
+            }}
+            {sel}:hover {{
+                background:#f4f6fb!important; color:#374151!important;
+            }}"""
+
     st.markdown(f"""
-    <div class="desk-nav">
-      <div class="dn-logo"><div class="dn-logo-icon">🗺️</div>Beat Plan Pro</div>
-      <div class="dn-links">{btns}</div>
-      <div class="dn-right">
-        <div><div class="dn-name">{name}</div><div style="font-size:11px;color:#9ca3af;">{rl}</div></div>
-        <div class="dn-avatar">{av}</div>
-      </div>
-    </div>""",unsafe_allow_html=True)
-
-    # Mobile header
-    st.markdown(f"""
-    <div class="mob-header">
-      <div class="mob-logo"><div class="mob-logo-icon">🗺️</div>Beat Plan Pro</div>
-      <div style="display:flex;align-items:center;gap:8px;">
-        <div style="text-align:right;">
-          <div style="font-size:12px;font-weight:600;color:#18181b;">{name}</div>
-          <div style="font-size:10px;color:#9ca3af;">{rl}</div>
-        </div>
-        <div class="mob-av">{av}</div>
-      </div>
-    </div>""",unsafe_allow_html=True)
-
-    # Mobile bottom nav
-    mob="<div class='mob-bot-nav'>"
-    for p in nav:
-        cls="mbn-item active" if page==p else "mbn-item"
-        lbl=p if len(p)<=7 else p[:6]+"…"
-        mob+=f'<div class="{cls}"><div class="mbn-icon">{icons.get(p,"")}</div>{lbl}</div>'
-    mob+="</div>"
-    st.markdown(mob,unsafe_allow_html=True)
-
-    # Invisible functional nav buttons (mobile tap targets)
-    st.markdown('<div class="mob-bot-btns">',unsafe_allow_html=True)
-    mcols=st.columns(len(nav))
-    for i,p in enumerate(nav):
-        with mcols[i]:
-            if st.button(".",key=f"mb_{p}",use_container_width=True): go(p)
-    st.markdown("</div>",unsafe_allow_html=True)
-
-    # Desktop: invisible functional buttons matching top nav
-    st.markdown("""
     <style>
-    .desk-nav-btns{display:flex;height:0;overflow:hidden;margin:0;padding:0;}
-    .desk-nav-btns .stButton>button{opacity:0!important;height:1px!important;min-height:0!important;
-      padding:0!important;border:none!important;background:transparent!important;box-shadow:none!important;}
-    @media(max-width:768px){.desk-nav-btns{display:none!important;}}
+    /* ── NAV BAR WRAPPER ── */
+    .nav-bar {{
+        position:sticky; top:0; z-index:999;
+        background:#fff; border-bottom:1px solid #e2e5ef;
+        box-shadow:0 2px 12px rgba(0,0,0,.05);
+        padding:10px 20px;
+        display:flex; align-items:center; gap:6px;
+        margin-bottom:22px;
+    }}
+    .nb-logo {{
+        display:flex; align-items:center; gap:9px;
+        font-size:16px; font-weight:800; color:#18181b;
+        letter-spacing:-.3px; white-space:nowrap; flex-shrink:0; margin-right:8px;
+    }}
+    .nb-logo-ico {{
+        width:32px; height:32px; border-radius:9px;
+        background:linear-gradient(135deg,#4f46e5,#7c3aed);
+        display:flex; align-items:center; justify-content:center; font-size:16px;
+        box-shadow:0 2px 8px rgba(79,70,229,.28);
+    }}
+    .nb-user {{
+        display:flex; align-items:center; gap:8px; margin-left:auto; flex-shrink:0;
+    }}
+    .nb-av {{
+        width:34px; height:34px; border-radius:50%;
+        background:linear-gradient(135deg,#4f46e5,#06b6d4);
+        color:#fff; font-size:12px; font-weight:700;
+        display:flex; align-items:center; justify-content:center;
+    }}
+
+    /* All nav buttons */
+    .nav-bar .stButton > button {{
+        border-radius:10px!important; height:38px!important;
+        font-size:13px!important; padding:0 14px!important;
+        transition:all .15s!important; white-space:nowrap!important;
+    }}
+    {btn_styles}
+
+    /* ── MOBILE: hide desktop nav, show mobile ui ── */
+    @media(max-width:768px) {{
+        .nav-bar        {{ display:none!important; }}
+        .mob-hdr        {{ display:flex!important; }}
+        .mob-bot        {{ display:flex!important; }}
+        .mob-btn-row    {{ display:flex!important; }}
+    }}
+    @media(min-width:769px) {{
+        .mob-hdr        {{ display:none!important; }}
+        .mob-bot        {{ display:none!important; }}
+        .mob-btn-row    {{ display:none!important; }}
+    }}
+
+    /* Mobile header */
+    .mob-hdr {{
+        display:none; position:sticky; top:0; z-index:999;
+        background:#fff; border-bottom:1px solid #e2e5ef;
+        padding:12px 16px; align-items:center; justify-content:space-between;
+        box-shadow:0 2px 12px rgba(0,0,0,.06); margin-bottom:0;
+    }}
+    .mob-logo {{
+        display:flex; align-items:center; gap:8px;
+        font-size:16px; font-weight:800; color:#18181b;
+    }}
+    .mob-logo-ico {{
+        width:30px; height:30px; border-radius:8px;
+        background:linear-gradient(135deg,#4f46e5,#7c3aed);
+        display:flex; align-items:center; justify-content:center; font-size:15px;
+    }}
+    .mob-av {{
+        width:32px; height:32px; border-radius:50%;
+        background:linear-gradient(135deg,#4f46e5,#06b6d4);
+        color:#fff; font-size:11px; font-weight:700;
+        display:flex; align-items:center; justify-content:center;
+    }}
+
+    /* Mobile bottom nav visual */
+    .mob-bot {{
+        display:none; position:fixed; bottom:0; left:0; right:0; z-index:999;
+        background:#fff; border-top:1px solid #e2e5ef;
+        justify-content:space-around; align-items:stretch;
+        box-shadow:0 -4px 20px rgba(0,0,0,.08);
+    }}
+    .mob-bot-item {{
+        flex:1; text-align:center; padding:7px 0 9px;
+        font-size:10px; font-weight:500;
+    }}
+    .mob-bot-item .mbi {{ font-size:22px; line-height:1; }}
+
+    /* Mobile tap-target button row */
+    .mob-btn-row {{
+        display:none; position:fixed; bottom:0; left:0; right:0;
+        z-index:1000; height:64px;
+    }}
+    .mob-btn-row .stButton > button {{
+        border-radius:0!important; height:64px!important;
+        background:transparent!important; color:transparent!important;
+        border:none!important; box-shadow:none!important;
+        font-size:1px!important; transform:none!important;
+    }}
+    .mob-btn-row .stButton > button:hover {{
+        background:transparent!important; transform:none!important;
+        box-shadow:none!important;
+    }}
     </style>
-    <div class="desk-nav-btns">""",unsafe_allow_html=True)
-    dcols=st.columns(len(nav)+2)
-    for i,p in enumerate(nav):
-        with dcols[i]:
-            if st.button(p,key=f"db_{p}",use_container_width=True): go(p)
-    st.markdown("</div>",unsafe_allow_html=True)
+    """, unsafe_allow_html=True)
+
+    # ── DESKTOP NAV BAR ───────────────────────────────────────
+    # Render as a flex row: logo | buttons... | user
+    # We use st.columns inside a div.nav-bar wrapper
+    st.markdown('<div class="nav-bar">', unsafe_allow_html=True)
+
+    # Logo
+    st.markdown(f'<div class="nb-logo"><div class="nb-logo-ico">🗺️</div>Beat Plan Pro</div>',
+                unsafe_allow_html=True)
+
+    # Nav buttons (real Streamlit, styled via CSS above)
+    nav_cols = st.columns(n)
+    for i, p in enumerate(nav):
+        with nav_cols[i]:
+            if st.button(f"{icons.get(p,'')} {p}", key=f"nav_{p}", use_container_width=True):
+                go(p)
+
+    # User chip
+    st.markdown(f"""
+    <div class="nb-user">
+        <div style="text-align:right;">
+            <div style="font-size:13px;font-weight:600;color:#374151;">{name}</div>
+            <div style="font-size:11px;color:#9ca3af;">{rl}</div>
+        </div>
+        <div class="nb-av">{av}</div>
+    </div>""", unsafe_allow_html=True)
+
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    # ── MOBILE HEADER ─────────────────────────────────────────
+    st.markdown(f"""
+    <div class="mob-hdr">
+        <div class="mob-logo">
+            <div class="mob-logo-ico">🗺️</div>Beat Plan Pro
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;">
+            <div style="text-align:right;">
+                <div style="font-size:12px;font-weight:600;color:#18181b;">{name}</div>
+                <div style="font-size:10px;color:#9ca3af;">{rl}</div>
+            </div>
+            <div class="mob-av">{av}</div>
+        </div>
+    </div>""", unsafe_allow_html=True)
+
+    # ── MOBILE BOTTOM NAV (visual) ────────────────────────────
+    mob_items_html = ""
+    for p in nav:
+        ac = "color:#4f46e5;font-weight:700;" if p == page else "color:#9ca3af;"
+        short = p if len(p) <= 8 else p[:7] + "…"
+        mob_items_html += f'<div class="mob-bot-item" style="{ac}"><div class="mbi">{icons.get(p,"")}</div>{short}</div>'
+
+    st.markdown(f'<div class="mob-bot">{mob_items_html}</div>', unsafe_allow_html=True)
+
+    # ── MOBILE BOTTOM NAV (real tap targets) ──────────────────
+    st.markdown('<div class="mob-btn-row">', unsafe_allow_html=True)
+    mob_cols = st.columns(n)
+    for i, p in enumerate(nav):
+        with mob_cols[i]:
+            if st.button(".", key=f"mob_{p}", use_container_width=True):
+                go(p)
+    st.markdown('</div>', unsafe_allow_html=True)
 
 def tl_item(vd,count,cities,stores,is_today=False):
     bc="tod" if is_today else "fut"
