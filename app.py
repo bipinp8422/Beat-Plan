@@ -20,6 +20,7 @@ except Exception as e:
 
 
 # ── CSS ───────────────────────────────────────────────────
+# ── Global CSS (shared components only — nav CSS is inside render_shell) ──
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
@@ -29,89 +30,30 @@ html,body,[class*="css"]{font-family:'Inter',sans-serif!important;}
 #MainMenu,footer,header{visibility:hidden;}
 [data-testid="collapsedControl"],[data-testid="stSidebar"]{display:none!important;}
 
-/* ═══════ DESKTOP (≥769px) ═══════ */
-.block-container{padding:0 0 60px 0!important;max-width:1160px!important;margin:0 auto!important;}
-
-.desk-nav{
-  background:#fff;border-bottom:1px solid #e2e5ef;
-  padding:0 32px;display:flex;align-items:center;height:62px;gap:4px;
-  position:sticky;top:0;z-index:999;box-shadow:0 2px 12px rgba(0,0,0,.05);
-  margin-bottom:24px;
+/* ── Layout ── */
+@media(min-width:769px){
+  .block-container{padding:0 0 60px 0!important;max-width:1160px!important;margin:0 auto!important;}
+  .page-pad{padding:0 32px!important;}
 }
-.dn-logo{display:flex;align-items:center;gap:9px;font-size:16px;font-weight:800;
-  color:#18181b;letter-spacing:-.3px;margin-right:18px;white-space:nowrap;}
-.dn-logo-icon{width:32px;height:32px;border-radius:9px;
-  background:linear-gradient(135deg,#4f46e5,#7c3aed);
-  display:flex;align-items:center;justify-content:center;font-size:16px;
-  box-shadow:0 2px 8px rgba(79,70,229,.28);}
-.dn-links{display:flex;gap:2px;flex:1;}
-.dn-btn{padding:7px 14px;border-radius:10px;font-size:13px;font-weight:500;
-  border:1px solid transparent;background:transparent;color:#6b7280;
-  cursor:pointer;transition:all .15s;white-space:nowrap;}
-.dn-btn:hover{background:#f4f6fb;color:#374151;}
-.dn-btn.active{background:#4f46e5;color:#fff;border-color:#4f46e5;
-  box-shadow:0 2px 8px rgba(79,70,229,.28);}
-.dn-right{display:flex;align-items:center;gap:9px;margin-left:auto;}
-.dn-avatar{width:34px;height:34px;border-radius:50%;
-  background:linear-gradient(135deg,#4f46e5,#06b6d4);
-  color:#fff;font-size:12px;font-weight:700;
-  display:flex;align-items:center;justify-content:center;flex-shrink:0;}
-.dn-name{font-size:13px;font-weight:600;color:#374151;}
-.dn-role{font-size:10.5px;padding:2px 9px;border-radius:20px;font-weight:600;background:#eef2ff;color:#4338ca;}
-
-.page-pad{padding:0 32px;}
-
-.stat-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px;margin-bottom:22px;}
-
-/* ═══════ MOBILE (≤768px) ═══════ */
 @media(max-width:768px){
-  .block-container{padding:0 0 88px 0!important;max-width:100%!important;}
-  .desk-nav{display:none!important;}
-  .mob-header{display:flex!important;}
-  .mob-bot-nav{display:flex!important;}
-  .mob-bot-btns{display:flex!important;}
+  .block-container{padding:0 0 82px 0!important;max-width:100%!important;}
   .page-pad{padding:0 14px!important;}
   .stat-grid{grid-template-columns:1fr 1fr!important;gap:10px!important;}
   .two-col{grid-template-columns:1fr!important;}
-  .qa-row{grid-template-columns:1fr 1fr!important;gap:10px!important;}
+  .qa-row{grid-template-columns:1fr 1fr!important;}
   .stButton>button{height:52px!important;font-size:15px!important;border-radius:14px!important;}
-  .stTextInput>div>div>input{height:52px!important;font-size:15px!important;padding:14px 16px!important;}
-  .stSelectbox>div>div{min-height:52px!important;font-size:15px!important;}
-  .stDateInput>div>div>input{height:52px!important;font-size:15px!important;}
+  .stTextInput>div>div>input{height:52px!important;font-size:15px!important;}
+  .stSelectbox>div>div{min-height:52px!important;}
+  .stDateInput>div>div>input{height:52px!important;}
   .stMultiSelect>div>div{min-height:52px!important;}
 }
 
-/* Mobile header */
-.mob-header{display:none;position:sticky;top:0;z-index:999;background:#fff;
-  border-bottom:1px solid #e2e5ef;padding:13px 16px 10px;
-  align-items:center;justify-content:space-between;
-  box-shadow:0 2px 12px rgba(0,0,0,.06);margin-bottom:0;}
-.mob-logo{display:flex;align-items:center;gap:8px;font-size:16px;font-weight:800;color:#18181b;}
-.mob-logo-icon{width:30px;height:30px;border-radius:8px;
-  background:linear-gradient(135deg,#4f46e5,#7c3aed);
-  display:flex;align-items:center;justify-content:center;font-size:15px;}
-.mob-av{width:32px;height:32px;border-radius:50%;
-  background:linear-gradient(135deg,#4f46e5,#06b6d4);
-  color:#fff;font-size:11px;font-weight:700;
-  display:flex;align-items:center;justify-content:center;}
+/* ── Components ── */
+.stat-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px;margin-bottom:22px;}
+.two-col{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:14px;}
+.qa-row{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin-bottom:18px;}
+.page-pad{padding:0 32px;}
 
-/* Mobile bottom nav */
-.mob-bot-nav{display:none;position:fixed;bottom:0;left:0;right:0;z-index:999;
-  background:#fff;border-top:1px solid #e2e5ef;
-  justify-content:space-around;align-items:center;
-  padding:6px 0 10px;box-shadow:0 -4px 20px rgba(0,0,0,.08);}
-.mbn-item{display:flex;flex-direction:column;align-items:center;gap:2px;
-  font-size:10px;font-weight:500;color:#9ca3af;flex:1;text-align:center;}
-.mbn-item.active{color:#4f46e5;}
-.mbn-icon{font-size:22px;line-height:1;}
-
-.mob-bot-btns{display:none;position:fixed;bottom:0;left:0;right:0;z-index:1000;height:64px;}
-.mob-bot-btns .stButton>button{
-  border-radius:0!important;height:64px!important;
-  background:transparent!important;color:transparent!important;
-  box-shadow:none!important;border:none!important;font-size:1px!important;}
-
-/* ═══════ SHARED COMPONENTS ═══════ */
 .greeting{background:linear-gradient(135deg,#4f46e5,#7c3aed);
   border-radius:20px;padding:24px;color:#fff;margin-bottom:20px;}
 .g-hi{font-size:22px;font-weight:800;margin-bottom:4px;}
@@ -132,22 +74,14 @@ html,body,[class*="css"]{font-family:'Inter',sans-serif!important;}
   padding:18px 20px;box-shadow:0 2px 10px rgba(0,0,0,.04);margin-bottom:14px;}
 .card-hdr{display:flex;align-items:center;gap:9px;font-size:14px;font-weight:700;color:#18181b;
   padding-bottom:12px;margin-bottom:14px;border-bottom:1px solid #f4f6fb;}
-.card-hdr-ico{width:28px;height:28px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:14px;}
+.card-hdr-ico{width:28px;height:28px;border-radius:8px;
+  display:flex;align-items:center;justify-content:center;font-size:14px;}
 .card-pill{font-size:11px;padding:3px 9px;border-radius:20px;font-weight:600;margin-left:auto;}
-
-.two-col{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:14px;}
-.qa-row{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin-bottom:18px;}
-.qa-card{background:#fff;border:1px solid #e2e5ef;border-radius:16px;
-  padding:18px 16px;display:flex;flex-direction:column;gap:8px;
-  box-shadow:0 2px 8px rgba(0,0,0,.04);transition:all .15s;}
-.qa-card:hover{transform:translateY(-2px);box-shadow:0 6px 18px rgba(0,0,0,.08);border-color:#c7d2fe;}
-.qa-ico{width:40px;height:40px;border-radius:12px;display:flex;align-items:center;justify-content:center;font-size:20px;}
-.qa-lbl{font-size:13.5px;font-weight:700;color:#18181b;}
-.qa-dsc{font-size:12px;color:#9ca3af;}
 
 .sec-hd{font-size:15px;font-weight:700;color:#18181b;
   margin:18px 0 10px;display:flex;align-items:center;gap:7px;}
-.sec-ct{font-size:11px;background:#f0f2f8;color:#6b7280;padding:2px 8px;border-radius:20px;font-weight:600;}
+.sec-ct{font-size:11px;background:#f0f2f8;color:#6b7280;
+  padding:2px 8px;border-radius:20px;font-weight:600;}
 
 .prog-row{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;}
 .prog-lbl{font-size:13px;font-weight:600;color:#374151;}
@@ -160,9 +94,12 @@ html,body,[class*="css"]{font-family:'Inter',sans-serif!important;}
   border-radius:14px;background:#f9fafb;border:1px solid #f0f2f8;
   margin-bottom:8px;transition:all .15s;}
 .si:hover{background:#f0f2f8;border-color:#e2e5ef;}
-.si-av{width:38px;height:38px;border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:17px;flex-shrink:0;}
-.av-i{background:#eef2ff;}.av-g{background:#f0fdf4;}.av-r{background:#fef2f2;}.av-a{background:#fffbeb;}
-.si-nm{font-size:13.5px;font-weight:600;color:#18181b;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.si-av{width:38px;height:38px;border-radius:10px;
+  display:flex;align-items:center;justify-content:center;font-size:17px;flex-shrink:0;}
+.av-i{background:#eef2ff;}.av-g{background:#f0fdf4;}
+.av-r{background:#fef2f2;}.av-a{background:#fffbeb;}
+.si-nm{font-size:13.5px;font-weight:600;color:#18181b;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .si-mt{font-size:12px;color:#9ca3af;margin-top:2px;}
 
 .bdg{font-size:11px;padding:4px 10px;border-radius:20px;font-weight:600;white-space:nowrap;flex-shrink:0;}
@@ -173,7 +110,8 @@ html,body,[class*="css"]{font-family:'Inter',sans-serif!important;}
 .tl{display:flex;gap:12px;align-items:flex-start;padding:12px 14px;
   border-radius:14px;background:#f9fafb;border:1px solid #f0f2f8;margin-bottom:8px;}
 .tl-date{width:44px;flex-shrink:0;text-align:center;border-radius:12px;padding:7px 3px;}
-.tl-date.tod{background:linear-gradient(135deg,#4f46e5,#7c3aed);box-shadow:0 3px 10px rgba(79,70,229,.28);}
+.tl-date.tod{background:linear-gradient(135deg,#4f46e5,#7c3aed);
+  box-shadow:0 3px 10px rgba(79,70,229,.28);}
 .tl-date.fut{background:#fff;border:1px solid #e2e5ef;}
 .tl-day{font-size:19px;font-weight:800;line-height:1;}
 .tl-mon{font-size:9px;text-transform:uppercase;letter-spacing:.06em;margin-top:2px;}
@@ -182,7 +120,18 @@ html,body,[class*="css"]{font-family:'Inter',sans-serif!important;}
 .tl-tt{font-size:13.5px;font-weight:700;color:#18181b;margin-bottom:2px;}
 .tl-sb{font-size:12px;color:#9ca3af;margin-bottom:5px;}
 .tl-pl{display:flex;flex-wrap:wrap;gap:4px;}
-.tl-p{font-size:11px;background:#fff;border:1px solid #e2e5ef;color:#4b5563;padding:2px 7px;border-radius:20px;}
+.tl-p{font-size:11px;background:#fff;border:1px solid #e2e5ef;
+  color:#4b5563;padding:2px 7px;border-radius:20px;}
+
+.qa-card{background:#fff;border:1px solid #e2e5ef;border-radius:16px;
+  padding:18px 16px;display:flex;flex-direction:column;gap:8px;
+  box-shadow:0 2px 8px rgba(0,0,0,.04);transition:all .15s;
+  text-decoration:none;}
+.qa-card:hover{transform:translateY(-2px);box-shadow:0 6px 18px rgba(0,0,0,.08);border-color:#c7d2fe;}
+.qa-ico{width:40px;height:40px;border-radius:12px;
+  display:flex;align-items:center;justify-content:center;font-size:20px;}
+.qa-lbl{font-size:13.5px;font-weight:700;color:#18181b;}
+.qa-dsc{font-size:12px;color:#9ca3af;}
 
 .ib{background:#eef2ff;border:1px solid #c7d2fe;border-radius:12px;
   padding:12px 16px;font-size:13px;color:#3730a3;margin-bottom:14px;line-height:1.6;}
@@ -208,7 +157,7 @@ html,body,[class*="css"]{font-family:'Inter',sans-serif!important;}
 .lg-sb{font-size:14px;color:#9ca3af;margin-top:5px;}
 .lg-lbl{font-size:13px;font-weight:600;color:#374151;margin-bottom:5px;}
 
-/* Streamlit overrides */
+/* ── Streamlit widget overrides ── */
 .stButton>button{border-radius:12px!important;height:44px!important;
   font-weight:700!important;font-size:14px!important;
   background:#4f46e5!important;color:#fff!important;border:none!important;
@@ -249,6 +198,7 @@ hr{border-color:#e2e5ef!important;margin:16px 0!important;}
   border-radius:14px!important;padding:16px!important;}
 </style>
 """, unsafe_allow_html=True)
+
 
 
 # ── DB helpers ────────────────────────────────────────────
@@ -343,6 +293,13 @@ DEF={"li":False,"role":"","ec":"","en":"","pg":"Home","sc":[]}
 for k,v in DEF.items():
     if k not in st.session_state: st.session_state[k]=v
 
+# Read ?pg=PageName from URL (set by HTML <a> nav links)
+_qp = st.query_params.get("pg", None)
+if _qp and st.session_state.li:
+    _pg = _qp.replace("+", " ")
+    if _pg != st.session_state.pg:
+        st.session_state.pg = _pg
+
 # ── Utility functions ─────────────────────────────────────
 def gstin_ok(g):
     return bool(re.match(r"^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$",str(g).strip().upper()))
@@ -356,7 +313,10 @@ def ini(name):
 
 def pc_color(n): return "#4f46e5" if n<8 else "#f59e0b" if n<10 else "#ef4444"
 
-def go(p): st.session_state.pg=p; st.rerun()
+def go(p):
+    st.session_state.pg = p
+    st.query_params["pg"] = p
+    st.rerun()
 
 def dl_btn(df,key,prefix="Beat_Plan"):
     if not df.empty:
@@ -391,198 +351,168 @@ def render_shell(name, role, page):
         "Home":"🏠","Beat Plan":"🎯","My Plans":"📅","Upcoming":"📆",
         "Analytics":"📈","Employees":"👥","Stores":"🏪","View Plans":"📋","Refresh":"🔄"
     }
-    n = len(nav)
 
-    # Build per-button styles so active = filled indigo, others = ghost
-    btn_styles = ""
-    for i, p in enumerate(nav):
-        sel = f"div[data-testid='stHorizontalBlock'] > div:nth-child({i+2}) .stButton > button"
-        if p == page:
-            btn_styles += f"""
-            {sel} {{
-                background:#4f46e5!important; color:#fff!important;
-                border:1px solid #4f46e5!important;
-                box-shadow:0 2px 8px rgba(79,70,229,.28)!important;
-                font-weight:700!important;
-            }}"""
-        else:
-            btn_styles += f"""
-            {sel} {{
-                background:transparent!important; color:#6b7280!important;
-                border:1px solid #e2e5ef!important;
-                box-shadow:none!important; font-weight:500!important;
-            }}
-            {sel}:hover {{
-                background:#f4f6fb!important; color:#374151!important;
-            }}"""
+    # Build nav button HTML — clicking sets ?pg=PageName in the URL
+    nav_btns_html = ""
+    for p in nav:
+        active = "nav-active" if p == page else ""
+        nav_btns_html += f'<a class="nav-btn {active}" href="?pg={p.replace(" ","+")}"{" aria-current=page" if p==page else ""}>{icons.get(p,"")} {p}</a>'
+
+    # Mobile bottom nav items
+    mob_nav_html = ""
+    for p in nav:
+        active_style = "color:#4f46e5;font-weight:700;" if p == page else "color:#9ca3af;"
+        short = p if len(p) <= 8 else p[:7] + "…"
+        mob_nav_html += f'<a class="mob-nav-item" href="?pg={p.replace(" ","+")}"><div class="mni-icon">{icons.get(p,"")}</div><div style="{active_style}">{short}</div></a>'
 
     st.markdown(f"""
     <style>
-    /* ── NAV BAR WRAPPER ── */
-    .nav-bar {{
-        position:sticky; top:0; z-index:999;
-        background:#fff; border-bottom:1px solid #e2e5ef;
-        box-shadow:0 2px 12px rgba(0,0,0,.05);
-        padding:10px 20px;
-        display:flex; align-items:center; gap:6px;
-        margin-bottom:22px;
+    /* ═══════ RESET ═══════ */
+    *,*::before,*::after{{box-sizing:border-box;}}
+    #MainMenu,footer,header{{visibility:hidden;}}
+    [data-testid="collapsedControl"],[data-testid="stSidebar"]{{display:none!important;}}
+    .stApp{{background:#f4f6fb!important;}}
+
+    /* ═══════ DESKTOP NAV ═══════ */
+    .top-nav{{
+        position:sticky;top:0;z-index:9999;
+        background:#ffffff;
+        border-bottom:1px solid #e2e5ef;
+        box-shadow:0 2px 12px rgba(0,0,0,.06);
+        display:flex;align-items:center;
+        padding:0 28px;height:62px;gap:6px;
     }}
-    .nb-logo {{
-        display:flex; align-items:center; gap:9px;
-        font-size:16px; font-weight:800; color:#18181b;
-        letter-spacing:-.3px; white-space:nowrap; flex-shrink:0; margin-right:8px;
+    .nav-logo{{
+        display:flex;align-items:center;gap:9px;
+        font-size:16px;font-weight:800;color:#18181b;
+        letter-spacing:-.3px;white-space:nowrap;
+        text-decoration:none;margin-right:14px;
     }}
-    .nb-logo-ico {{
-        width:32px; height:32px; border-radius:9px;
+    .nav-logo-icon{{
+        width:32px;height:32px;border-radius:9px;
         background:linear-gradient(135deg,#4f46e5,#7c3aed);
-        display:flex; align-items:center; justify-content:center; font-size:16px;
-        box-shadow:0 2px 8px rgba(79,70,229,.28);
+        display:flex;align-items:center;justify-content:center;font-size:16px;
+        box-shadow:0 2px 8px rgba(79,70,229,.28);flex-shrink:0;
     }}
-    .nb-user {{
-        display:flex; align-items:center; gap:8px; margin-left:auto; flex-shrink:0;
+    .nav-links{{display:flex;align-items:center;gap:3px;flex:1;}}
+    .nav-btn{{
+        display:inline-flex;align-items:center;gap:5px;
+        padding:7px 13px;border-radius:10px;
+        font-size:13px;font-weight:500;color:#6b7280;
+        text-decoration:none;border:1px solid transparent;
+        transition:all .15s;white-space:nowrap;cursor:pointer;
     }}
-    .nb-av {{
-        width:34px; height:34px; border-radius:50%;
+    .nav-btn:hover{{background:#f4f6fb;color:#374151;}}
+    .nav-active{{
+        background:#4f46e5!important;color:#fff!important;
+        border-color:#4f46e5!important;font-weight:700!important;
+        box-shadow:0 2px 8px rgba(79,70,229,.28)!important;
+    }}
+    .nav-user{{
+        display:flex;align-items:center;gap:9px;margin-left:auto;flex-shrink:0;
+    }}
+    .nav-avatar{{
+        width:34px;height:34px;border-radius:50%;
         background:linear-gradient(135deg,#4f46e5,#06b6d4);
-        color:#fff; font-size:12px; font-weight:700;
-        display:flex; align-items:center; justify-content:center;
+        color:#fff;font-size:12px;font-weight:700;
+        display:flex;align-items:center;justify-content:center;flex-shrink:0;
     }}
+    .nav-uname{{font-size:13px;font-weight:600;color:#374151;}}
+    .nav-urole{{font-size:10.5px;color:#9ca3af;}}
 
-    /* All nav buttons */
-    .nav-bar .stButton > button {{
-        border-radius:10px!important; height:38px!important;
-        font-size:13px!important; padding:0 14px!important;
-        transition:all .15s!important; white-space:nowrap!important;
+    /* ═══════ MOBILE HEADER ═══════ */
+    .mob-header{{
+        display:none;position:sticky;top:0;z-index:9999;
+        background:#fff;border-bottom:1px solid #e2e5ef;
+        padding:12px 16px;align-items:center;justify-content:space-between;
+        box-shadow:0 2px 10px rgba(0,0,0,.06);
     }}
-    {btn_styles}
-
-    /* ── MOBILE: hide desktop nav, show mobile ui ── */
-    @media(max-width:768px) {{
-        .nav-bar        {{ display:none!important; }}
-        .mob-hdr        {{ display:flex!important; }}
-        .mob-bot        {{ display:flex!important; }}
-        .mob-btn-row    {{ display:flex!important; }}
-    }}
-    @media(min-width:769px) {{
-        .mob-hdr        {{ display:none!important; }}
-        .mob-bot        {{ display:none!important; }}
-        .mob-btn-row    {{ display:none!important; }}
-    }}
-
-    /* Mobile header */
-    .mob-hdr {{
-        display:none; position:sticky; top:0; z-index:999;
-        background:#fff; border-bottom:1px solid #e2e5ef;
-        padding:12px 16px; align-items:center; justify-content:space-between;
-        box-shadow:0 2px 12px rgba(0,0,0,.06); margin-bottom:0;
-    }}
-    .mob-logo {{
-        display:flex; align-items:center; gap:8px;
-        font-size:16px; font-weight:800; color:#18181b;
-    }}
-    .mob-logo-ico {{
-        width:30px; height:30px; border-radius:8px;
+    .mob-logo{{display:flex;align-items:center;gap:8px;font-size:16px;font-weight:800;color:#18181b;}}
+    .mob-logo-icon{{width:30px;height:30px;border-radius:8px;
         background:linear-gradient(135deg,#4f46e5,#7c3aed);
-        display:flex; align-items:center; justify-content:center; font-size:15px;
-    }}
-    .mob-av {{
-        width:32px; height:32px; border-radius:50%;
+        display:flex;align-items:center;justify-content:center;font-size:15px;}}
+    .mob-avatar{{width:32px;height:32px;border-radius:50%;
         background:linear-gradient(135deg,#4f46e5,#06b6d4);
-        color:#fff; font-size:11px; font-weight:700;
-        display:flex; align-items:center; justify-content:center;
-    }}
+        color:#fff;font-size:11px;font-weight:700;
+        display:flex;align-items:center;justify-content:center;}}
 
-    /* Mobile bottom nav visual */
-    .mob-bot {{
-        display:none; position:fixed; bottom:0; left:0; right:0; z-index:999;
-        background:#fff; border-top:1px solid #e2e5ef;
-        justify-content:space-around; align-items:stretch;
+    /* ═══════ MOBILE BOTTOM NAV ═══════ */
+    .mob-bottom-nav{{
+        display:none;position:fixed;bottom:0;left:0;right:0;z-index:9999;
+        background:#fff;border-top:1px solid #e2e5ef;
+        justify-content:space-around;align-items:stretch;
         box-shadow:0 -4px 20px rgba(0,0,0,.08);
+        padding-bottom:env(safe-area-inset-bottom);
     }}
-    .mob-bot-item {{
-        flex:1; text-align:center; padding:7px 0 9px;
-        font-size:10px; font-weight:500;
+    .mob-nav-item{{
+        display:flex;flex-direction:column;align-items:center;justify-content:center;
+        flex:1;padding:7px 4px 9px;text-decoration:none;gap:2px;
     }}
-    .mob-bot-item .mbi {{ font-size:22px; line-height:1; }}
+    .mni-icon{{font-size:22px;line-height:1;}}
 
-    /* Mobile tap-target button row */
-    .mob-btn-row {{
-        display:none; position:fixed; bottom:0; left:0; right:0;
-        z-index:1000; height:64px;
+    /* ═══════ RESPONSIVE ═══════ */
+    @media(max-width:768px){{
+        .top-nav{{display:none!important;}}
+        .mob-header{{display:flex!important;}}
+        .mob-bottom-nav{{display:flex!important;}}
+        .block-container{{padding:0 0 80px 0!important;max-width:100%!important;}}
+        .page-pad{{padding:0 14px!important;}}
+        .stat-grid{{grid-template-columns:1fr 1fr!important;gap:10px!important;}}
+        .two-col{{grid-template-columns:1fr!important;}}
+        .qa-row{{grid-template-columns:1fr 1fr!important;}}
+        .stButton>button{{height:52px!important;font-size:15px!important;border-radius:14px!important;}}
+        .stTextInput>div>div>input{{height:52px!important;font-size:15px!important;}}
+        .stSelectbox>div>div{{min-height:52px!important;}}
+        .stDateInput>div>div>input{{height:52px!important;}}
+        .stMultiSelect>div>div{{min-height:52px!important;}}
     }}
-    .mob-btn-row .stButton > button {{
-        border-radius:0!important; height:64px!important;
-        background:transparent!important; color:transparent!important;
-        border:none!important; box-shadow:none!important;
-        font-size:1px!important; transform:none!important;
+    @media(min-width:769px){{
+        .block-container{{padding:0 0 60px 0!important;max-width:1160px!important;margin:0 auto!important;}}
+        .page-pad{{padding:0 32px!important;}}
     }}
-    .mob-btn-row .stButton > button:hover {{
-        background:transparent!important; transform:none!important;
-        box-shadow:none!important;
-    }}
+
+    /* ═══════ HIDE ALL STREAMLIT BUTTONS IN NAV AREA ═══════ */
+    /* We use ONLY HTML <a> links for navigation — no st.button at all */
     </style>
-    """, unsafe_allow_html=True)
 
-    # ── DESKTOP NAV BAR ───────────────────────────────────────
-    # Render as a flex row: logo | buttons... | user
-    # We use st.columns inside a div.nav-bar wrapper
-    st.markdown('<div class="nav-bar">', unsafe_allow_html=True)
-
-    # Logo
-    st.markdown(f'<div class="nb-logo"><div class="nb-logo-ico">🗺️</div>Beat Plan Pro</div>',
-                unsafe_allow_html=True)
-
-    # Nav buttons (real Streamlit, styled via CSS above)
-    nav_cols = st.columns(n)
-    for i, p in enumerate(nav):
-        with nav_cols[i]:
-            if st.button(f"{icons.get(p,'')} {p}", key=f"nav_{p}", use_container_width=True):
-                go(p)
-
-    # User chip
-    st.markdown(f"""
-    <div class="nb-user">
-        <div style="text-align:right;">
-            <div style="font-size:13px;font-weight:600;color:#374151;">{name}</div>
-            <div style="font-size:11px;color:#9ca3af;">{rl}</div>
+    <!-- DESKTOP TOP NAV -->
+    <div class="top-nav">
+        <div class="nav-logo">
+            <div class="nav-logo-icon">🗺️</div>
+            Beat Plan Pro
         </div>
-        <div class="nb-av">{av}</div>
-    </div>""", unsafe_allow_html=True)
+        <div class="nav-links">
+            {nav_btns_html}
+        </div>
+        <div class="nav-user">
+            <div style="text-align:right;">
+                <div class="nav-uname">{name}</div>
+                <div class="nav-urole">{rl}</div>
+            </div>
+            <div class="nav-avatar">{av}</div>
+        </div>
+    </div>
 
-    st.markdown('</div>', unsafe_allow_html=True)
-
-    # ── MOBILE HEADER ─────────────────────────────────────────
-    st.markdown(f"""
-    <div class="mob-hdr">
+    <!-- MOBILE HEADER -->
+    <div class="mob-header">
         <div class="mob-logo">
-            <div class="mob-logo-ico">🗺️</div>Beat Plan Pro
+            <div class="mob-logo-icon">🗺️</div>
+            Beat Plan Pro
         </div>
         <div style="display:flex;align-items:center;gap:8px;">
             <div style="text-align:right;">
                 <div style="font-size:12px;font-weight:600;color:#18181b;">{name}</div>
                 <div style="font-size:10px;color:#9ca3af;">{rl}</div>
             </div>
-            <div class="mob-av">{av}</div>
+            <div class="mob-avatar">{av}</div>
         </div>
-    </div>""", unsafe_allow_html=True)
+    </div>
 
-    # ── MOBILE BOTTOM NAV (visual) ────────────────────────────
-    mob_items_html = ""
-    for p in nav:
-        ac = "color:#4f46e5;font-weight:700;" if p == page else "color:#9ca3af;"
-        short = p if len(p) <= 8 else p[:7] + "…"
-        mob_items_html += f'<div class="mob-bot-item" style="{ac}"><div class="mbi">{icons.get(p,"")}</div>{short}</div>'
-
-    st.markdown(f'<div class="mob-bot">{mob_items_html}</div>', unsafe_allow_html=True)
-
-    # ── MOBILE BOTTOM NAV (real tap targets) ──────────────────
-    st.markdown('<div class="mob-btn-row">', unsafe_allow_html=True)
-    mob_cols = st.columns(n)
-    for i, p in enumerate(nav):
-        with mob_cols[i]:
-            if st.button(".", key=f"mob_{p}", use_container_width=True):
-                go(p)
-    st.markdown('</div>', unsafe_allow_html=True)
+    <!-- MOBILE BOTTOM NAV -->
+    <div class="mob-bottom-nav">
+        {mob_nav_html}
+    </div>
+    """, unsafe_allow_html=True)
 
 def tl_item(vd,count,cities,stores,is_today=False):
     bc="tod" if is_today else "fut"
