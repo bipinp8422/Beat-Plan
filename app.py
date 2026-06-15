@@ -1,989 +1,1057 @@
 import streamlit as st
 import pandas as pd
 from datetime import date, timedelta
-import re, io, datetime as dt_mod
+import re
+import io
 from supabase import create_client, Client
 
-# ── Page config ──────────────────────────────────────────
-st.set_page_config(page_title="Beat Plan Pro", page_icon="🗺️",
-                   layout="wide", initial_sidebar_state="collapsed")
+# ====================== PAGE CONFIG ======================
+st.set_page_config(
+    page_title="Beat Plan Pro",
+    page_icon="🗺️",
+    layout="wide",
+    initial_sidebar_state="collapsed"
+)
 
-# ── Supabase ─────────────────────────────────────────────
+# ====================== SUPABASE CONFIG ======================
 SUPABASE_URL = "https://kueicdruccvbempjvxzn.supabase.co"
-SUPABASE_KEY = ("eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9."
-                "eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imt1ZWljZHJ1Y2N2YmVtcGp2eHpuIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODExMjE0MTcsImV4cCI6MjA5NjY5NzQxN30."
-                "aWkQ85Wq-iP2Gp1W1dfoATdRhR0rFcc1H6CGtK_zDE0")
+SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imt1ZWljZHJ1Y2N2YmVtcGp2eHpuIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODExMjE0MTcsImV4cCI6MjA5NjY5NzQxN30.aWkQ85Wq-iP2Gp1W1dfoATdRhR0rFcc1H6CGtK_zDE0"
+
 try:
     supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 except Exception as e:
-    st.error(f"Supabase error: {e}"); st.stop()
+    st.error(f"Failed to connect to Supabase: {e}")
+    st.stop()
 
-
-# ── CSS ───────────────────────────────────────────────────
-# ── Global CSS (shared components only — nav CSS is inside render_shell) ──
+# ====================== CSS ======================
 st.markdown("""
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
-*,*::before,*::after{box-sizing:border-box;}
-html,body,[class*="css"]{font-family:'Inter',sans-serif!important;}
-.stApp{background:#f4f6fb!important;}
-#MainMenu,footer,header{visibility:hidden;}
-[data-testid="collapsedControl"],[data-testid="stSidebar"]{display:none!important;}
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
 
-/* ── Layout ── */
-@media(min-width:769px){
-  .block-container{padding:0 0 60px 0!important;max-width:1160px!important;margin:0 auto!important;}
-  .page-pad{padding:0 32px!important;}
+html, body, [class*="css"] { font-family: 'Inter', sans-serif !important; }
+
+.stApp { background: #f0f2f5 !important; }
+.block-container { padding: 1.5rem 2rem 4rem 2rem !important; max-width: 1100px !important; }
+#MainMenu, footer, header { visibility: hidden; }
+
+/* ── Hide sidebar toggle ── */
+[data-testid="collapsedControl"] { display: none !important; }
+
+/* ── TOP NAV BAR ── */
+.topnav {
+    background: #ffffff;
+    border: 1px solid #e5e7eb;
+    border-radius: 16px;
+    padding: 12px 20px;
+    display: flex;
+    align-items: center;
+    gap: 0;
+    margin-bottom: 1.5rem;
 }
-@media(max-width:768px){
-  .block-container{padding:0 0 82px 0!important;max-width:100%!important;}
-  .page-pad{padding:0 14px!important;}
-  .stat-grid{grid-template-columns:1fr 1fr!important;gap:10px!important;}
-  .two-col{grid-template-columns:1fr!important;}
-  .qa-row{grid-template-columns:1fr 1fr!important;}
-  .stButton>button{height:52px!important;font-size:15px!important;border-radius:14px!important;}
-  .stTextInput>div>div>input{height:52px!important;font-size:15px!important;}
-  .stSelectbox>div>div{min-height:52px!important;}
-  .stDateInput>div>div>input{height:52px!important;}
-  .stMultiSelect>div>div{min-height:52px!important;}
+.topnav-logo {
+    display: flex; align-items: center; gap: 8px;
+    font-size: 15px; font-weight: 700; color: #111827;
+    margin-right: 24px; white-space: nowrap;
+}
+.logo-dots { display: flex; flex-direction: column; gap: 3px; }
+.logo-dot1 { width: 8px; height: 8px; background: #4f46e5; border-radius: 50%; }
+.logo-dot2 { width: 5px; height: 5px; background: #06b6d4; border-radius: 50%; margin-left: 1px; }
+.topnav-links { display: flex; gap: 6px; flex: 1; }
+.topnav-btn {
+    padding: 7px 18px; border-radius: 10px;
+    font-size: 13.5px; font-weight: 500; cursor: pointer;
+    border: 1px solid #e5e7eb; background: #ffffff; color: #374151;
+    transition: all 0.15s;
+}
+.topnav-btn:hover { background: #f9fafb; }
+.topnav-btn.active { background: #4f46e5; color: #ffffff; border-color: #4f46e5; }
+.topnav-user {
+    display: flex; align-items: center; gap: 9px;
+    font-size: 13.5px; font-weight: 600; color: #374151;
+    margin-left: auto;
+}
+.topnav-avatar {
+    width: 34px; height: 34px; border-radius: 50%;
+    background: linear-gradient(135deg, #4f46e5, #06b6d4);
+    color: #fff; font-size: 12px; font-weight: 700;
+    display: flex; align-items: center; justify-content: center;
 }
 
-/* ── Components ── */
-.stat-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px;margin-bottom:22px;}
-.two-col{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:14px;}
-.qa-row{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin-bottom:18px;}
-.page-pad{padding:0 32px;}
+/* ── STAT CARDS ── */
+.stats-row {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 14px;
+    margin-bottom: 1.5rem;
+}
+.stat-card {
+    background: #ffffff;
+    border: 1px solid #e5e7eb;
+    border-radius: 16px;
+    padding: 20px 22px;
+    position: relative;
+    overflow: hidden;
+}
+.stat-left-bar {
+    position: absolute; top: 0; left: 0;
+    width: 4px; height: 100%;
+    border-radius: 16px 0 0 16px;
+}
+.stat-icon-wrap {
+    width: 36px; height: 36px; border-radius: 10px;
+    display: flex; align-items: center; justify-content: center;
+    margin-bottom: 14px; font-size: 17px;
+}
+.stat-number {
+    font-size: 28px; font-weight: 700; color: #111827;
+    letter-spacing: -0.5px; line-height: 1; margin-bottom: 4px;
+}
+.stat-label { font-size: 12.5px; color: #9ca3af; font-weight: 500; }
+.stat-trend {
+    font-size: 12px; font-weight: 600; margin-top: 10px;
+    padding-top: 10px; border-top: 1px solid #f3f4f6;
+}
 
-.greeting{background:linear-gradient(135deg,#4f46e5,#7c3aed);
-  border-radius:20px;padding:24px;color:#fff;margin-bottom:20px;}
-.g-hi{font-size:22px;font-weight:800;margin-bottom:4px;}
-.g-sub{font-size:13.5px;opacity:.85;}
-.g-date{font-size:12px;opacity:.65;margin-top:8px;}
+/* ── TWO COLUMN CONTENT ── */
+.content-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 14px;
+    margin-bottom: 14px;
+}
 
-.stat-card{background:#fff;border:1px solid #e2e5ef;border-radius:16px;
-  padding:18px 18px 14px;position:relative;overflow:hidden;
-  box-shadow:0 2px 10px rgba(0,0,0,.04);transition:transform .15s,box-shadow .15s;}
-.stat-card:hover{transform:translateY(-2px);box-shadow:0 6px 20px rgba(0,0,0,.08);}
-.s-top{position:absolute;top:0;left:0;width:100%;height:3px;}
-.s-ico{font-size:22px;margin-bottom:10px;}
-.s-val{font-size:26px;font-weight:800;color:#18181b;letter-spacing:-1px;line-height:1;}
-.s-lbl{font-size:12px;color:#9ca3af;margin-top:3px;font-weight:500;}
-.s-ft{font-size:11.5px;font-weight:600;margin-top:9px;padding-top:8px;border-top:1px solid #f4f6fb;}
+/* ── PANEL CARD ── */
+.panel-card {
+    background: #ffffff;
+    border: 1px solid #e5e7eb;
+    border-radius: 16px;
+    padding: 20px 22px;
+}
+.panel-header {
+    display: flex; align-items: center; gap: 8px;
+    font-size: 14px; font-weight: 700; color: #374151;
+    margin-bottom: 14px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid #f3f4f6;
+}
+.panel-badge {
+    font-size: 11px; padding: 2px 9px;
+    border-radius: 20px; font-weight: 600;
+    background: #eef2ff; color: #4338ca;
+    margin-left: auto;
+}
+.panel-icon { font-size: 16px; }
 
-.card{background:#fff;border:1px solid #e2e5ef;border-radius:16px;
-  padding:18px 20px;box-shadow:0 2px 10px rgba(0,0,0,.04);margin-bottom:14px;}
-.card-hdr{display:flex;align-items:center;gap:9px;font-size:14px;font-weight:700;color:#18181b;
-  padding-bottom:12px;margin-bottom:14px;border-bottom:1px solid #f4f6fb;}
-.card-hdr-ico{width:28px;height:28px;border-radius:8px;
-  display:flex;align-items:center;justify-content:center;font-size:14px;}
-.card-pill{font-size:11px;padding:3px 9px;border-radius:20px;font-weight:600;margin-left:auto;}
+/* ── PROGRESS BAR ── */
+.prog-row {
+    display: flex; justify-content: space-between;
+    align-items: center; margin-bottom: 8px;
+}
+.prog-label { font-size: 13px; font-weight: 500; color: #374151; }
+.prog-count { font-size: 13px; color: #9ca3af; font-weight: 600; }
+.prog-bg { height: 7px; background: #f3f4f6; border-radius: 99px; overflow: hidden; margin-bottom: 16px; }
+.prog-fill { height: 100%; border-radius: 99px; }
 
-.sec-hd{font-size:15px;font-weight:700;color:#18181b;
-  margin:18px 0 10px;display:flex;align-items:center;gap:7px;}
-.sec-ct{font-size:11px;background:#f0f2f8;color:#6b7280;
-  padding:2px 8px;border-radius:20px;font-weight:600;}
+/* ── STORE ITEM ── */
+.store-item {
+    display: flex; align-items: center; gap: 12px;
+    padding: 10px 0;
+    border-bottom: 1px solid #f9fafb;
+}
+.store-item:last-child { border-bottom: none; }
+.store-icon-wrap {
+    width: 36px; height: 36px; border-radius: 9px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 15px; flex-shrink: 0;
+}
+.si-blue   { background: #eef2ff; color: #4f46e5; }
+.si-red    { background: #fef2f2; color: #dc2626; }
+.si-amber  { background: #fffbeb; color: #d97706; }
+.store-name-txt { font-size: 13.5px; font-weight: 600; color: #111827; }
+.store-meta-txt { font-size: 12px; color: #9ca3af; margin-top: 1px; }
 
-.prog-row{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;}
-.prog-lbl{font-size:13px;font-weight:600;color:#374151;}
-.prog-num{font-size:13px;font-weight:700;}
-.prog-track{height:8px;background:#f0f2f8;border-radius:99px;overflow:hidden;margin-bottom:6px;}
-.prog-fill{height:100%;border-radius:99px;}
-.prog-hint{font-size:12px;color:#9ca3af;}
+/* ── BADGE ── */
+.badge {
+    font-size: 11px; padding: 3px 10px; border-radius: 20px;
+    font-weight: 600; white-space: nowrap; flex-shrink: 0;
+}
+.badge-green  { background: #dcfce7; color: #15803d; }
+.badge-red    { background: #fee2e2; color: #b91c1c; }
+.badge-amber  { background: #fef9c3; color: #854d0e; }
 
-.si{display:flex;align-items:center;gap:12px;padding:12px 14px;
-  border-radius:14px;background:#f9fafb;border:1px solid #f0f2f8;
-  margin-bottom:8px;transition:all .15s;}
-.si:hover{background:#f0f2f8;border-color:#e2e5ef;}
-.si-av{width:38px;height:38px;border-radius:10px;
-  display:flex;align-items:center;justify-content:center;font-size:17px;flex-shrink:0;}
-.av-i{background:#eef2ff;}.av-g{background:#f0fdf4;}
-.av-r{background:#fef2f2;}.av-a{background:#fffbeb;}
-.si-nm{font-size:13.5px;font-weight:600;color:#18181b;
-  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-.si-mt{font-size:12px;color:#9ca3af;margin-top:2px;}
+/* ── TIMELINE ── */
+.timeline-item {
+    display: flex; gap: 14px; align-items: flex-start;
+    padding: 10px 0; border-bottom: 1px solid #f9fafb;
+}
+.timeline-item:last-child { border-bottom: none; padding-bottom: 0; }
+.t-date-badge {
+    width: 46px; flex-shrink: 0; text-align: center;
+    border-radius: 12px; padding: 8px 5px;
+}
+.t-date-badge.today { background: #4f46e5; }
+.t-date-badge.future { background: #f3f4f6; border: 1px solid #e5e7eb; }
+.t-day { font-size: 20px; font-weight: 700; line-height: 1; }
+.t-mon { font-size: 10px; text-transform: uppercase; letter-spacing: .05em; margin-top: 2px; }
+.t-date-badge.today .t-day, .t-date-badge.today .t-mon { color: #ffffff; }
+.t-date-badge.future .t-day { color: #111827; }
+.t-date-badge.future .t-mon { color: #9ca3af; }
+.t-stores-lbl { font-size: 13.5px; font-weight: 600; color: #111827; margin-bottom: 2px; }
+.t-city-lbl   { font-size: 12px; color: #9ca3af; margin-bottom: 6px; }
+.t-pills      { display: flex; flex-wrap: wrap; gap: 4px; }
+.t-pill       { font-size: 11px; background: #f3f4f6; color: #4b5563; padding: 2px 8px; border-radius: 20px; }
 
-.bdg{font-size:11px;padding:4px 10px;border-radius:20px;font-weight:600;white-space:nowrap;flex-shrink:0;}
-.bg{background:#dcfce7;color:#15803d;}.br{background:#fee2e2;color:#b91c1c;}
-.ba{background:#fef9c3;color:#854d0e;}.bp{background:#ede9fe;color:#6d28d9;}
-.bb{background:#dbeafe;color:#1d4ed8;}
+/* ── SECTION HEADING ── */
+.sec-head {
+    font-size: 14px; font-weight: 700; color: #374151;
+    margin: 1.5rem 0 10px 0;
+    display: flex; align-items: center; gap: 8px;
+}
+.sec-cnt {
+    font-size: 11px; background: #f3f4f6; color: #6b7280;
+    padding: 2px 8px; border-radius: 20px; font-weight: 500;
+}
 
-.tl{display:flex;gap:12px;align-items:flex-start;padding:12px 14px;
-  border-radius:14px;background:#f9fafb;border:1px solid #f0f2f8;margin-bottom:8px;}
-.tl-date{width:44px;flex-shrink:0;text-align:center;border-radius:12px;padding:7px 3px;}
-.tl-date.tod{background:linear-gradient(135deg,#4f46e5,#7c3aed);
-  box-shadow:0 3px 10px rgba(79,70,229,.28);}
-.tl-date.fut{background:#fff;border:1px solid #e2e5ef;}
-.tl-day{font-size:19px;font-weight:800;line-height:1;}
-.tl-mon{font-size:9px;text-transform:uppercase;letter-spacing:.06em;margin-top:2px;}
-.tl-date.tod .tl-day,.tl-date.tod .tl-mon{color:#fff;}
-.tl-date.fut .tl-day{color:#18181b;}.tl-date.fut .tl-mon{color:#9ca3af;}
-.tl-tt{font-size:13.5px;font-weight:700;color:#18181b;margin-bottom:2px;}
-.tl-sb{font-size:12px;color:#9ca3af;margin-bottom:5px;}
-.tl-pl{display:flex;flex-wrap:wrap;gap:4px;}
-.tl-p{font-size:11px;background:#fff;border:1px solid #e2e5ef;
-  color:#4b5563;padding:2px 7px;border-radius:20px;}
+/* ── LOGIN ── */
+.login-wrap { max-width: 420px; margin: 2rem auto 0; }
+.login-logo-box {
+    text-align: center; margin-bottom: 1.75rem;
+}
+.login-icon {
+    width: 54px; height: 54px; border-radius: 14px;
+    background: linear-gradient(135deg, #4f46e5, #06b6d4);
+    display: inline-flex; align-items: center;
+    justify-content: center; font-size: 24px; color: #fff;
+    margin-bottom: 12px;
+}
+.login-title { font-size: 22px; font-weight: 700; color: #111827; }
+.login-sub   { font-size: 13px; color: #9ca3af; margin-top: 4px; }
+.login-card  {
+    background: #fff; border: 1px solid #e5e7eb;
+    border-radius: 18px; padding: 28px 30px;
+    box-shadow: 0 4px 24px rgba(0,0,0,0.04);
+}
 
-.qa-card{background:#fff;border:1px solid #e2e5ef;border-radius:16px;
-  padding:18px 16px;display:flex;flex-direction:column;gap:8px;
-  box-shadow:0 2px 8px rgba(0,0,0,.04);transition:all .15s;
-  text-decoration:none;}
-.qa-card:hover{transform:translateY(-2px);box-shadow:0 6px 18px rgba(0,0,0,.08);border-color:#c7d2fe;}
-.qa-ico{width:40px;height:40px;border-radius:12px;
-  display:flex;align-items:center;justify-content:center;font-size:20px;}
-.qa-lbl{font-size:13.5px;font-weight:700;color:#18181b;}
-.qa-dsc{font-size:12px;color:#9ca3af;}
+/* ── BUTTONS ── */
+.stButton > button {
+    border-radius: 10px !important; height: 42px !important;
+    font-weight: 600 !important; font-size: 13.5px !important;
+    background: #4f46e5 !important; color: #fff !important;
+    border: none !important; letter-spacing: 0.1px !important;
+}
+.stButton > button:hover { background: #4338ca !important; }
 
-.ib{background:#eef2ff;border:1px solid #c7d2fe;border-radius:12px;
-  padding:12px 16px;font-size:13px;color:#3730a3;margin-bottom:14px;line-height:1.6;}
-.wb{background:#fffbeb;border:1px solid #fcd34d;border-radius:12px;
-  padding:12px 16px;font-size:13px;color:#92400e;margin-bottom:14px;line-height:1.6;}
+/* ── INPUTS ── */
+.stTextInput > div > div > input {
+    border-radius: 10px !important; border: 1.5px solid #e5e7eb !important;
+    font-size: 13.5px !important; background: #fafafa !important;
+}
+.stTextInput > div > div > input:focus {
+    border-color: #4f46e5 !important; background: #fff !important;
+    box-shadow: 0 0 0 3px rgba(79,70,229,0.08) !important;
+}
+.stSelectbox > div > div {
+    border-radius: 10px !important; border: 1.5px solid #e5e7eb !important;
+}
+.stMultiSelect > div > div {
+    border-radius: 10px !important; border: 1.5px solid #e5e7eb !important;
+}
+.stDateInput > div > div > input {
+    border-radius: 10px !important; border: 1.5px solid #e5e7eb !important;
+}
+.stTextArea > div > div > textarea {
+    border-radius: 10px !important; border: 1.5px solid #e5e7eb !important;
+    font-size: 13.5px !important;
+}
 
-.pt{font-size:22px;font-weight:800;color:#18181b;letter-spacing:-.5px;margin-bottom:2px;}
-.ps{font-size:13px;color:#9ca3af;margin-bottom:18px;}
+/* ── TABS ── */
+.stTabs [data-baseweb="tab-list"] {
+    gap: 3px; background: #f0f2f5;
+    border-radius: 12px; padding: 4px; border: none !important;
+}
+.stTabs [data-baseweb="tab"] {
+    border-radius: 9px !important; font-size: 13px !important;
+    font-weight: 500 !important; padding: 7px 20px !important;
+    color: #6b7280 !important; background: transparent !important;
+    border: none !important;
+}
+.stTabs [aria-selected="true"] {
+    background: #ffffff !important; color: #111827 !important;
+    font-weight: 600 !important;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.07) !important;
+}
 
-.emp{text-align:center;padding:48px 20px;}
-.emp-ico{font-size:44px;margin-bottom:12px;}
-.emp-tt{font-size:15px;font-weight:700;color:#374151;margin-bottom:4px;}
-.emp-sb{font-size:13px;color:#9ca3af;line-height:1.6;}
+/* ── TABLE ── */
+.stDataFrame {
+    border-radius: 14px !important; border: 1px solid #e5e7eb !important;
+    overflow: hidden !important;
+}
 
-.lg-wrap{max-width:430px;margin:0 auto;padding:32px 20px;}
-.lg-top{text-align:center;margin-bottom:28px;}
-.lg-ico{width:66px;height:66px;border-radius:20px;
-  background:linear-gradient(135deg,#4f46e5,#7c3aed);
-  display:inline-flex;align-items:center;justify-content:center;
-  font-size:30px;color:#fff;margin-bottom:16px;
-  box-shadow:0 8px 24px rgba(79,70,229,.3);}
-.lg-tt{font-size:25px;font-weight:800;color:#18181b;letter-spacing:-.5px;}
-.lg-sb{font-size:14px;color:#9ca3af;margin-top:5px;}
-.lg-lbl{font-size:13px;font-weight:600;color:#374151;margin-bottom:5px;}
+/* ── ALERTS ── */
+.stAlert { border-radius: 12px !important; font-size: 13.5px !important; }
 
-/* ── Streamlit widget overrides ── */
-.stButton>button{border-radius:12px!important;height:44px!important;
-  font-weight:700!important;font-size:14px!important;
-  background:#4f46e5!important;color:#fff!important;border:none!important;
-  box-shadow:0 3px 10px rgba(79,70,229,.22)!important;transition:all .15s!important;}
-.stButton>button:hover{background:#4338ca!important;
-  box-shadow:0 5px 16px rgba(79,70,229,.35)!important;transform:translateY(-1px)!important;}
-.stButton>button:active{transform:scale(.98)!important;}
-.stTextInput>div>div>input{border-radius:11px!important;border:1.5px solid #e2e5ef!important;
-  font-size:14px!important;background:#fafbff!important;padding:11px 14px!important;}
-.stTextInput>div>div>input:focus{border-color:#4f46e5!important;background:#fff!important;
-  box-shadow:0 0 0 3px rgba(79,70,229,.1)!important;}
-.stTextInput>div>div>input::placeholder{color:#c4c9d9!important;}
-.stSelectbox>div>div,.stMultiSelect>div>div{border-radius:11px!important;
-  border:1.5px solid #e2e5ef!important;background:#fafbff!important;}
-.stDateInput>div>div>input{border-radius:11px!important;border:1.5px solid #e2e5ef!important;}
-.stTextArea>div>div>textarea{border-radius:11px!important;border:1.5px solid #e2e5ef!important;
-  font-size:14px!important;background:#fafbff!important;padding:12px 14px!important;}
-.stTabs [data-baseweb="tab-list"]{gap:4px;background:#f0f2f8;border-radius:12px;
-  padding:4px;border:none!important;}
-.stTabs [data-baseweb="tab"]{border-radius:9px!important;font-size:13px!important;
-  font-weight:600!important;padding:8px 18px!important;color:#6b7280!important;
-  background:transparent!important;border:none!important;}
-.stTabs [aria-selected="true"]{background:#fff!important;color:#4f46e5!important;
-  font-weight:700!important;box-shadow:0 1px 6px rgba(0,0,0,.08)!important;}
-.stDataFrame{border-radius:14px!important;border:1px solid #e2e5ef!important;overflow:hidden!important;}
-.stAlert{border-radius:12px!important;font-size:13.5px!important;}
-.stDownloadButton>button{background:#f9fafb!important;color:#374151!important;
-  border:1.5px solid #e2e5ef!important;border-radius:12px!important;
-  font-weight:600!important;box-shadow:none!important;}
-.stDownloadButton>button:hover{background:#f0f2f8!important;transform:none!important;}
-.streamlit-expanderHeader{background:#f9fafb!important;border-radius:12px!important;
-  font-size:13.5px!important;font-weight:600!important;
-  border:1px solid #e2e5ef!important;color:#374151!important;}
-hr{border-color:#e2e5ef!important;margin:16px 0!important;}
-.stTextInput label,.stSelectbox label,.stMultiSelect label,
-.stDateInput label,.stTextArea label{font-size:13px!important;font-weight:600!important;color:#374151!important;}
-[data-testid="stMetric"]{background:#fff!important;border:1px solid #e2e5ef!important;
-  border-radius:14px!important;padding:16px!important;}
+/* ── DOWNLOAD ── */
+.stDownloadButton > button {
+    background: #f9fafb !important; color: #374151 !important;
+    border: 1.5px solid #e5e7eb !important;
+    border-radius: 10px !important; font-weight: 600 !important;
+}
+
+/* ── EXPANDER ── */
+.streamlit-expanderHeader {
+    background: #f9fafb !important; border-radius: 10px !important;
+    font-size: 13.5px !important; font-weight: 600 !important;
+    border: 1px solid #e5e7eb !important;
+}
+
+/* ── DIVIDER ── */
+hr { border-color: #e5e7eb !important; margin: 1.5rem 0 !important; }
+
+/* ── SIDEBAR (used only for admin extra nav) ── */
+[data-testid="stSidebar"] { background: #ffffff !important; border-right: 1px solid #e5e7eb !important; }
+[data-testid="stSidebar"] .stRadio > label { display: none; }
+[data-testid="stSidebar"] .stRadio div[role="radiogroup"] { gap: 1px !important; }
+[data-testid="stSidebar"] .stRadio div[role="radiogroup"] label {
+    background: transparent !important; border: none !important;
+    border-left: 2.5px solid transparent !important; border-radius: 0 !important;
+    padding: 10px 16px !important; font-size: 13.5px !important;
+    font-weight: 400 !important; color: #6b7280 !important;
+    cursor: pointer !important; width: 100% !important;
+}
+[data-testid="stSidebar"] .stRadio div[role="radiogroup"] label:has(input:checked) {
+    background: #eef2ff !important; color: #4f46e5 !important;
+    border-left-color: #4f46e5 !important; font-weight: 600 !important;
+}
 </style>
 """, unsafe_allow_html=True)
 
-
-
-# ── DB helpers ────────────────────────────────────────────
+# ====================== COLUMN MAP ======================
 COLUMN_MAP = {
-    "EmployeeCode":["employeecode","employee_code"],
-    "EmployeeName":["employeename","employee_name"],
-    "Password":["password"],"StoreID":["storeid","store_id"],
-    "StoreName":["storename","store_name"],"GSTNumber":["gstnumber","gst_number"],
-    "City":["city"],"Store":["store"],"VisitDate":["visitdate","visit_date"],
-    "Username":["username"],
+    "EmployeeCode": ["employeecode","employee_code"],
+    "EmployeeName": ["employeename","employee_name"],
+    "Password":     ["password"],
+    "StoreID":      ["storeid","store_id"],
+    "StoreName":    ["storename","store_name"],
+    "GSTNumber":    ["gstnumber","gst_number"],
+    "City":         ["city"],
+    "Store":        ["store"],
+    "VisitDate":    ["visitdate","visit_date"],
+    "Username":     ["username"],
 }
 
 def normalize_columns(df):
-    rename={}; lower_map={c.lower().replace("_",""):c for c in df.columns}
-    for exp,variants in COLUMN_MAP.items():
-        if exp in df.columns: continue
+    rename = {}
+    lower_map = {c.lower().replace("_",""): c for c in df.columns}
+    for expected, variants in COLUMN_MAP.items():
+        if expected in df.columns: continue
         for v in variants:
-            k=v.lower().replace("_","")
-            if k in lower_map: rename[lower_map[k]]=exp; break
+            key = v.lower().replace("_","")
+            if key in lower_map:
+                rename[lower_map[key]] = expected
+                break
     return df.rename(columns=rename) if rename else df
 
+# ====================== DB ======================
 def init_db():
-    try: supabase.table("planned_visits").select("*").limit(1).execute(); return True
-    except Exception as e: st.error(f"Supabase: {e}"); return False
+    try:
+        supabase.table("planned_visits").select("*").limit(1).execute()
+        return True
+    except Exception as e:
+        st.error(f"Supabase connection failed: {e}")
+        return False
 
-def clean_df(df, cols):
+def clean_dataframe(df, expected_columns):
     if df.empty: return df
-    df=normalize_columns(df)
-    for c in cols:
-        if c not in df.columns: df[c]=""
-    for c in df.select_dtypes(include=["object"]).columns:
-        df[c]=df[c].astype(str).str.strip()
+    df = normalize_columns(df)
+    for col in expected_columns:
+        if col not in df.columns: df[col] = ""
+    for col in df.select_dtypes(include=["object"]).columns:
+        df[col] = df[col].astype(str).str.strip()
     if "VisitDate" in df.columns:
-        df["VisitDate"]=pd.to_datetime(df["VisitDate"],errors="coerce").dt.date
+        df["VisitDate"] = pd.to_datetime(df["VisitDate"], errors="coerce").dt.date
     return df
 
-def load_sb(table, columns):
+def load_from_supabase(table_name, columns):
     try:
-        rows,bs,off=[],1000,0
+        all_rows, batch_size, offset = [], 1000, 0
         while True:
-            r=supabase.table(table).select("*").range(off,off+bs-1).execute()
-            if not r.data: break
-            rows.extend(r.data)
-            if len(r.data)<bs: break
-            off+=bs
-        return clean_df(pd.DataFrame(rows),columns) if rows else pd.DataFrame(columns=columns)
+            response = supabase.table(table_name).select("*").range(offset, offset+batch_size-1).execute()
+            if not response.data: break
+            all_rows.extend(response.data)
+            if len(response.data) < batch_size: break
+            offset += batch_size
+        if all_rows:
+            return clean_dataframe(pd.DataFrame(all_rows), columns)
+        return pd.DataFrame(columns=columns)
     except Exception as e:
-        st.warning(f"Load error {table}: {e}"); return pd.DataFrame(columns=columns)
+        st.warning(f"Error loading `{table_name}`: {e}")
+        return pd.DataFrame(columns=columns)
 
-def sanitize(df):
-    import math; d=df.copy()
-    for c in d.columns:
-        if pd.api.types.is_float_dtype(d[c]):
-            d[c]=d[c].apply(lambda x: None if (x is None or (isinstance(x,float) and (math.isnan(x) or math.isinf(x)))) else x)
-        elif d[c].dtype==object:
-            d[c]=d[c].apply(lambda x: None if (x is None or (isinstance(x,str) and x.lower() in ("nan","none",""))) else x)
-    return d.where(pd.notnull(d),None)
+def sanitize_for_json(df):
+    import math
+    df_copy = df.copy()
+    for col in df_copy.columns:
+        if pd.api.types.is_float_dtype(df_copy[col]):
+            df_copy[col] = df_copy[col].apply(
+                lambda x: None if (x is None or (isinstance(x,float) and (math.isnan(x) or math.isinf(x)))) else x)
+        elif df_copy[col].dtype == object:
+            df_copy[col] = df_copy[col].apply(
+                lambda x: None if (x is None or (isinstance(x,str) and x.lower() in ("nan","none",""))) else x)
+    return df_copy.where(pd.notnull(df_copy), None)
 
-def save_sb(table, df):
+def save_to_supabase(table_name, df):
     try:
-        d=df.copy()
-        if "id" in d.columns: d=d.drop("id",axis=1)
-        for c in d.columns:
-            if c=="VisitDate" or pd.api.types.is_datetime64_any_dtype(d[c]):
-                d[c]=pd.to_datetime(d[c],errors="coerce").dt.strftime("%Y-%m-%d")
-        d=sanitize(d)
-        try: supabase.table(table).delete().neq("id",-1).execute()
+        df_copy = df.copy()
+        if "id" in df_copy.columns: df_copy = df_copy.drop("id", axis=1)
+        for col in df_copy.columns:
+            if col == "VisitDate" or pd.api.types.is_datetime64_any_dtype(df_copy[col]):
+                df_copy[col] = pd.to_datetime(df_copy[col], errors="coerce").dt.strftime("%Y-%m-%d")
+        df_copy = sanitize_for_json(df_copy)
+        try: supabase.table(table_name).delete().neq("id",-1).execute()
         except: pass
-        if not d.empty:
-            recs=[{k:v for k,v in r.items() if v is not None} for r in d.to_dict("records")]
-            for i in range(0,len(recs),100): supabase.table(table).insert(recs[i:i+100]).execute()
+        if not df_copy.empty:
+            records = [{k:v for k,v in r.items() if v is not None} for r in df_copy.to_dict("records")]
+            for i in range(0, len(records), 100):
+                supabase.table(table_name).insert(records[i:i+100]).execute()
         return True
-    except Exception as e: st.error(f"Save error: {e}"); return False
+    except Exception as e:
+        st.error(f"Save failed for `{table_name}`: {e}")
+        return False
 
-# ── Constants ─────────────────────────────────────────────
-EC=["EmployeeCode","EmployeeName","Password"]
-GC=["StoreID","StoreName","GSTNumber","City","EmployeeCode"]
-PC=["EmployeeCode","EmployeeName","City","Store","GSTNumber","StoreID","VisitDate"]
-AC=["Username","Password"]
+# ====================== CONSTANTS ======================
+EMP_COLS   = ["EmployeeCode","EmployeeName","Password"]
+GST_COLS   = ["StoreID","StoreName","GSTNumber","City","EmployeeCode"]
+PLAN_COLS  = ["EmployeeCode","EmployeeName","City","Store","GSTNumber","StoreID","VisitDate"]
+ADMIN_COLS = ["Username","Password"]
 
-# ── Init session ──────────────────────────────────────────
+# ====================== INIT ======================
 if not init_db(): st.stop()
-for key,loader in [
-    ("edf",lambda:load_sb("employee_master",EC)),
-    ("gdf",lambda:load_sb("gst_master",GC)),
-    ("pdf",lambda:load_sb("planned_visits",PC)),
-    ("adf",lambda:load_sb("admin_master",AC)),
+
+for key, loader in [
+    ("employee_df", lambda: load_from_supabase("employee_master", EMP_COLS)),
+    ("gst_df",      lambda: load_from_supabase("gst_master",      GST_COLS)),
+    ("planned_df",  lambda: load_from_supabase("planned_visits",  PLAN_COLS)),
+    ("admin_df",    lambda: load_from_supabase("admin_master",    ADMIN_COLS)),
 ]:
-    if key not in st.session_state: st.session_state[key]=loader()
+    if key not in st.session_state: st.session_state[key] = loader()
 
-DEF={"li":False,"role":"","ec":"","en":"","pg":"Home","sc":[]}
-for k,v in DEF.items():
-    if k not in st.session_state: st.session_state[k]=v
+for k,v in {"logged_in":False,"role":"","emp_code":"","emp_name":"","page":"Dashboard","selected_cities":[]}.items():
+    if k not in st.session_state: st.session_state[k] = v
 
-# Read ?pg=PageName from URL (set by HTML <a> nav links)
-_qp = st.query_params.get("pg", None)
-if _qp and st.session_state.li:
-    _pg = _qp.replace("+", " ")
-    if _pg != st.session_state.pg:
-        st.session_state.pg = _pg
+# ====================== HELPERS ======================
+def is_valid_gstin(g):
+    return bool(re.match(r"^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$", str(g).strip().upper()))
 
-# ── Utility functions ─────────────────────────────────────
-def gstin_ok(g):
-    return bool(re.match(r"^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$",str(g).strip().upper()))
-
-def sc(df,col):
+def safe_col(df, col):
     return df[col] if col in df.columns else pd.Series([""]*len(df))
 
-def ini(name):
-    p=str(name).strip().split()
-    return (p[0][0]+p[-1][0]).upper() if len(p)>=2 else name[:2].upper()
+def get_initials(name):
+    parts = str(name).strip().split()
+    return (parts[0][0]+parts[-1][0]).upper() if len(parts)>=2 else name[:2].upper()
 
-def pc_color(n): return "#4f46e5" if n<8 else "#f59e0b" if n<10 else "#ef4444"
+def get_prog_color(pc):
+    return "#4f46e5" if pc < 8 else "#f59e0b" if pc < 10 else "#ef4444"
 
-def go(p):
-    st.session_state.pg = p
-    st.query_params["pg"] = p
-    st.rerun()
-
-def dl_btn(df,key,prefix="Beat_Plan"):
+def download_button(df, key, prefix="Beat_Plan"):
     if not df.empty:
-        out=io.BytesIO()
-        with pd.ExcelWriter(out,engine="openpyxl") as w: df.to_excel(w,index=False,sheet_name="Beat Plan")
+        out = io.BytesIO()
+        with pd.ExcelWriter(out, engine="openpyxl") as w:
+            df.to_excel(w, index=False, sheet_name="Beat Plan")
         out.seek(0)
-        st.download_button("⬇  Export Excel",data=out.getvalue(),
+        st.download_button("⬇  Download Excel", data=out.getvalue(),
             file_name=f"{prefix}_{date.today()}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            use_container_width=True,key=key)
+            use_container_width=True, key=key)
 
-def stat_cards(items):
-    h="<div class='stat-grid'>"
-    for top,ico,val,lbl,ft,fc in items:
-        h+=f"<div class='stat-card'><div class='s-top' style='background:{top}'></div><div class='s-ico'>{ico}</div><div class='s-val'>{val}</div><div class='s-lbl'>{lbl}</div><div class='s-ft' style='color:{fc};'>{ft}</div></div>"
-    h+="</div>"; st.markdown(h,unsafe_allow_html=True)
+def render_topnav(name, role, page):
+    """Render the top navigation bar matching screenshot exactly."""
+    initials = get_initials(name) if name else ("AD" if role=="admin" else "??")
 
-def empty(ico,tt,sb=""):
-    st.markdown(f"<div class='emp'><div class='emp-ico'>{ico}</div><div class='emp-tt'>{tt}</div><div class='emp-sb'>{sb}</div></div>",unsafe_allow_html=True)
+    # Build nav buttons based on role
+    if role == "admin":
+        nav_items = ["Dashboard","Employees","Stores","View Plans","Refresh"]
+    else:
+        nav_items = ["Dashboard","Beat Plan","My Plans","Analytics"]
 
-def ib(msg): st.markdown(f"<div class='ib'>ℹ️  {msg}</div>",unsafe_allow_html=True)
-def wb(msg): st.markdown(f"<div class='wb'>⚠️  {msg}</div>",unsafe_allow_html=True)
-def phdr(t,s=""): st.markdown(f"<div class='pt'>{t}</div>{'<div class=ps>'+s+'</div>' if s else ''}",unsafe_allow_html=True)
-
-def render_shell(name, role, page):
-    av  = ini(name)
-    rl  = "Admin" if role == "admin" else "Employee"
-    emp_nav = ["Home","Beat Plan","My Plans","Upcoming","Analytics"]
-    adm_nav = ["Home","Employees","Stores","View Plans","Refresh"]
-    nav = adm_nav if role == "admin" else emp_nav
-    icons = {
-        "Home":"🏠","Beat Plan":"🎯","My Plans":"📅","Upcoming":"📆",
-        "Analytics":"📈","Employees":"👥","Stores":"🏪","View Plans":"📋","Refresh":"🔄"
-    }
-
-    # Build nav button HTML — clicking sets ?pg=PageName in the URL
-    nav_btns_html = ""
-    for p in nav:
-        active = "nav-active" if p == page else ""
-        nav_btns_html += f'<a class="nav-btn {active}" href="?pg={p.replace(" ","+")}"{" aria-current=page" if p==page else ""}>{icons.get(p,"")} {p}</a>'
-
-    # Mobile bottom nav items
-    mob_nav_html = ""
-    for p in nav:
-        active_style = "color:#4f46e5;font-weight:700;" if p == page else "color:#9ca3af;"
-        short = p if len(p) <= 8 else p[:7] + "…"
-        mob_nav_html += f'<a class="mob-nav-item" href="?pg={p.replace(" ","+")}"><div class="mni-icon">{icons.get(p,"")}</div><div style="{active_style}">{short}</div></a>'
+    # Extra pages for employee that aren't in top nav go via a More button
+    btns_html = ""
+    for item in nav_items:
+        active = "active" if page == item else ""
+        btns_html += f'<button class="topnav-btn {active}" onclick="void(0)">{item}</button>'
 
     st.markdown(f"""
-    <style>
-    /* ═══════ RESET ═══════ */
-    *,*::before,*::after{{box-sizing:border-box;}}
-    #MainMenu,footer,header{{visibility:hidden;}}
-    [data-testid="collapsedControl"],[data-testid="stSidebar"]{{display:none!important;}}
-    .stApp{{background:#f4f6fb!important;}}
-
-    /* ═══════ DESKTOP NAV ═══════ */
-    .top-nav{{
-        position:sticky;top:0;z-index:9999;
-        background:#ffffff;
-        border-bottom:1px solid #e2e5ef;
-        box-shadow:0 2px 12px rgba(0,0,0,.06);
-        display:flex;align-items:center;
-        padding:0 28px;height:62px;gap:6px;
-    }}
-    .nav-logo{{
-        display:flex;align-items:center;gap:9px;
-        font-size:16px;font-weight:800;color:#18181b;
-        letter-spacing:-.3px;white-space:nowrap;
-        text-decoration:none;margin-right:14px;
-    }}
-    .nav-logo-icon{{
-        width:32px;height:32px;border-radius:9px;
-        background:linear-gradient(135deg,#4f46e5,#7c3aed);
-        display:flex;align-items:center;justify-content:center;font-size:16px;
-        box-shadow:0 2px 8px rgba(79,70,229,.28);flex-shrink:0;
-    }}
-    .nav-links{{display:flex;align-items:center;gap:3px;flex:1;}}
-    .nav-btn{{
-        display:inline-flex;align-items:center;gap:5px;
-        padding:7px 13px;border-radius:10px;
-        font-size:13px;font-weight:500;color:#6b7280;
-        text-decoration:none;border:1px solid transparent;
-        transition:all .15s;white-space:nowrap;cursor:pointer;
-    }}
-    .nav-btn:hover{{background:#f4f6fb;color:#374151;}}
-    .nav-active{{
-        background:#4f46e5!important;color:#fff!important;
-        border-color:#4f46e5!important;font-weight:700!important;
-        box-shadow:0 2px 8px rgba(79,70,229,.28)!important;
-    }}
-    .nav-user{{
-        display:flex;align-items:center;gap:9px;margin-left:auto;flex-shrink:0;
-    }}
-    .nav-avatar{{
-        width:34px;height:34px;border-radius:50%;
-        background:linear-gradient(135deg,#4f46e5,#06b6d4);
-        color:#fff;font-size:12px;font-weight:700;
-        display:flex;align-items:center;justify-content:center;flex-shrink:0;
-    }}
-    .nav-uname{{font-size:13px;font-weight:600;color:#374151;}}
-    .nav-urole{{font-size:10.5px;color:#9ca3af;}}
-
-    /* ═══════ MOBILE HEADER ═══════ */
-    .mob-header{{
-        display:none;position:sticky;top:0;z-index:9999;
-        background:#fff;border-bottom:1px solid #e2e5ef;
-        padding:12px 16px;align-items:center;justify-content:space-between;
-        box-shadow:0 2px 10px rgba(0,0,0,.06);
-    }}
-    .mob-logo{{display:flex;align-items:center;gap:8px;font-size:16px;font-weight:800;color:#18181b;}}
-    .mob-logo-icon{{width:30px;height:30px;border-radius:8px;
-        background:linear-gradient(135deg,#4f46e5,#7c3aed);
-        display:flex;align-items:center;justify-content:center;font-size:15px;}}
-    .mob-avatar{{width:32px;height:32px;border-radius:50%;
-        background:linear-gradient(135deg,#4f46e5,#06b6d4);
-        color:#fff;font-size:11px;font-weight:700;
-        display:flex;align-items:center;justify-content:center;}}
-
-    /* ═══════ MOBILE BOTTOM NAV ═══════ */
-    .mob-bottom-nav{{
-        display:none;position:fixed;bottom:0;left:0;right:0;z-index:9999;
-        background:#fff;border-top:1px solid #e2e5ef;
-        justify-content:space-around;align-items:stretch;
-        box-shadow:0 -4px 20px rgba(0,0,0,.08);
-        padding-bottom:env(safe-area-inset-bottom);
-    }}
-    .mob-nav-item{{
-        display:flex;flex-direction:column;align-items:center;justify-content:center;
-        flex:1;padding:7px 4px 9px;text-decoration:none;gap:2px;
-    }}
-    .mni-icon{{font-size:22px;line-height:1;}}
-
-    /* ═══════ RESPONSIVE ═══════ */
-    @media(max-width:768px){{
-        .top-nav{{display:none!important;}}
-        .mob-header{{display:flex!important;}}
-        .mob-bottom-nav{{display:flex!important;}}
-        .block-container{{padding:0 0 80px 0!important;max-width:100%!important;}}
-        .page-pad{{padding:0 14px!important;}}
-        .stat-grid{{grid-template-columns:1fr 1fr!important;gap:10px!important;}}
-        .two-col{{grid-template-columns:1fr!important;}}
-        .qa-row{{grid-template-columns:1fr 1fr!important;}}
-        .stButton>button{{height:52px!important;font-size:15px!important;border-radius:14px!important;}}
-        .stTextInput>div>div>input{{height:52px!important;font-size:15px!important;}}
-        .stSelectbox>div>div{{min-height:52px!important;}}
-        .stDateInput>div>div>input{{height:52px!important;}}
-        .stMultiSelect>div>div{{min-height:52px!important;}}
-    }}
-    @media(min-width:769px){{
-        .block-container{{padding:0 0 60px 0!important;max-width:1160px!important;margin:0 auto!important;}}
-        .page-pad{{padding:0 32px!important;}}
-    }}
-
-    /* ═══════ HIDE ALL STREAMLIT BUTTONS IN NAV AREA ═══════ */
-    /* We use ONLY HTML <a> links for navigation — no st.button at all */
-    </style>
-
-    <!-- DESKTOP TOP NAV -->
-    <div class="top-nav">
-        <div class="nav-logo">
-            <div class="nav-logo-icon">🗺️</div>
+    <div class="topnav">
+        <div class="topnav-logo">
+            <div class="logo-dots">
+                <div class="logo-dot1"></div>
+                <div class="logo-dot2"></div>
+            </div>
             Beat Plan Pro
         </div>
-        <div class="nav-links">
-            {nav_btns_html}
+        <div class="topnav-links">
+            {btns_html}
         </div>
-        <div class="nav-user">
-            <div style="text-align:right;">
-                <div class="nav-uname">{name}</div>
-                <div class="nav-urole">{rl}</div>
-            </div>
-            <div class="nav-avatar">{av}</div>
+        <div class="topnav-user">
+            <div class="topnav-avatar">{initials}</div>
+            {name}
         </div>
-    </div>
+    </div>""", unsafe_allow_html=True)
 
-    <!-- MOBILE HEADER -->
-    <div class="mob-header">
-        <div class="mob-logo">
-            <div class="mob-logo-icon">🗺️</div>
-            Beat Plan Pro
-        </div>
-        <div style="display:flex;align-items:center;gap:8px;">
-            <div style="text-align:right;">
-                <div style="font-size:12px;font-weight:600;color:#18181b;">{name}</div>
-                <div style="font-size:10px;color:#9ca3af;">{rl}</div>
-            </div>
-            <div class="mob-avatar">{av}</div>
-        </div>
-    </div>
+def render_stat_cards(stats):
+    """stats = list of (accent, icon_bg, icon_color, emoji, value, label, trend, trend_color)"""
+    html = "<div class='stats-row'>"
+    for accent, icon_bg, icon_color, emoji, value, label, trend, tcolor in stats:
+        html += f"""
+        <div class="stat-card">
+            <div class="stat-left-bar" style="background:{accent}"></div>
+            <div class="stat-icon-wrap" style="background:{icon_bg};color:{icon_color};">{emoji}</div>
+            <div class="stat-number">{value}</div>
+            <div class="stat-label">{label}</div>
+            <div class="stat-trend" style="color:{tcolor};">{trend}</div>
+        </div>"""
+    html += "</div>"
+    st.markdown(html, unsafe_allow_html=True)
 
-    <!-- MOBILE BOTTOM NAV -->
-    <div class="mob-bottom-nav">
-        {mob_nav_html}
-    </div>
+# ====================== LOGIN ======================
+if not st.session_state.logged_in:
+    st.markdown("<div class='login-wrap'>", unsafe_allow_html=True)
+    st.markdown("""
+        <div class="login-logo-box">
+            <div class="login-icon">🗺️</div>
+            <div class="login-title">Beat Plan Pro</div>
+            <div class="login-sub">Smart store visit planning system</div>
+        </div>
     """, unsafe_allow_html=True)
 
-def tl_item(vd,count,cities,stores,is_today=False):
-    bc="tod" if is_today else "fut"
-    pills="".join(f"<span class='tl-p'>{s}</span>" for s in stores[:4])
-    if len(stores)>4: pills+=f"<span class='tl-p'>+{len(stores)-4}</span>"
-    tag="<span class='bdg bp'>Today</span>" if is_today else ""
-    st.markdown(f"""
-    <div class="tl">
-      <div class="tl-date {bc}">
-        <div class="tl-day">{vd.strftime('%d')}</div>
-        <div class="tl-mon">{vd.strftime('%b')}</div>
-      </div>
-      <div style="flex:1;min-width:0;">
-        <div class="tl-tt">{count} stores · {vd.strftime('%A')}</div>
-        <div class="tl-sb">{cities}</div>
-        <div class="tl-pl">{pills}</div>
-      </div>
-      {tag}
-    </div>""",unsafe_allow_html=True)
+    with st.container():
+        login_type = st.radio("Login as", ["👤  Admin", "👷  Employee"], horizontal=True, label_visibility="collapsed")
+        st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
 
+        if "Admin" in login_type:
+            user = st.text_input("Username", placeholder="Enter your username", key="admin_user")
+            pwd  = st.text_input("Password", type="password", placeholder="••••••••", key="admin_pwd")
+            if st.button("Sign in as Admin", type="primary", use_container_width=True):
+                if not user or not pwd:
+                    st.error("Please fill in both fields.")
+                else:
+                    df = st.session_state.admin_df
+                    match = (
+                        (df["Username"].astype(str).str.strip() == user.strip()) &
+                        (df["Password"].astype(str).str.strip() == pwd.strip())
+                    ) if "Username" in df.columns else pd.Series([False])
+                    if match.any():
+                        st.session_state.logged_in = True
+                        st.session_state.role = "admin"
+                        st.session_state.emp_name = "Admin"
+                        st.session_state.page = "Dashboard"
+                        st.rerun()
+                    else:
+                        st.error(f"Invalid credentials. ({len(df)} admin record(s) found)")
+        else:
+            emp_in = st.text_input("Employee Code", placeholder="e.g. EMP001", key="emp_code_login")
+            pwd_in = st.text_input("Password", type="password", placeholder="••••••••", key="emp_pwd_login")
+            if st.button("Sign in as Employee", type="primary", use_container_width=True):
+                if not emp_in or not pwd_in:
+                    st.error("Please fill in both fields.")
+                else:
+                    df = st.session_state.employee_df
+                    match = df[
+                        (df["EmployeeCode"].astype(str).str.strip() == emp_in.strip()) &
+                        (df["Password"].astype(str).str.strip()     == pwd_in.strip())
+                    ] if "EmployeeCode" in df.columns else pd.DataFrame()
+                    if not match.empty:
+                        st.session_state.logged_in = True
+                        st.session_state.role      = "employee"
+                        st.session_state.emp_code  = str(match.iloc[0]["EmployeeCode"])
+                        st.session_state.emp_name  = match.iloc[0]["EmployeeName"]
+                        st.session_state.page      = "Dashboard"
+                        st.rerun()
+                    else:
+                        st.error(f"Invalid credentials. ({len(df)} employee record(s) found)")
 
-# ── LOGIN ──────────────────────────────────────────────────
-if not st.session_state.li:
-    st.markdown("<div class='lg-wrap'>",unsafe_allow_html=True)
-    st.markdown("""
-    <div class="lg-top">
-      <div class="lg-ico">🗺️</div>
-      <div class="lg-tt">Beat Plan Pro</div>
-      <div class="lg-sb">Smart store visit planning for field teams</div>
-    </div>""",unsafe_allow_html=True)
-
-    ltype=st.radio("Role",["🛡️  Admin","👷  Employee"],horizontal=True,label_visibility="collapsed")
-    st.markdown("<div style='height:10px'></div>",unsafe_allow_html=True)
-
-    if "Admin" in ltype:
-        st.markdown("<div class='lg-lbl'>👤 Username</div>",unsafe_allow_html=True)
-        user=st.text_input("u",placeholder="Admin username",key="au",label_visibility="collapsed")
-        st.markdown("<div class='lg-lbl'>🔒 Password</div>",unsafe_allow_html=True)
-        pwd=st.text_input("p",type="password",placeholder="Password",key="ap",label_visibility="collapsed")
-        st.markdown("<div style='height:6px'></div>",unsafe_allow_html=True)
-        if st.button("Sign in as Admin →",type="primary",use_container_width=True):
-            if not user or not pwd: st.error("Enter both fields.")
-            else:
-                df=st.session_state.adf
-                ok=((df["Username"].astype(str).str.strip()==user.strip())&(df["Password"].astype(str).str.strip()==pwd.strip())) if "Username" in df.columns else pd.Series([False])
-                if ok.any(): st.session_state.update(li=True,role="admin",en="Admin",pg="Home"); st.rerun()
-                else: st.error("❌ Incorrect credentials.")
-    else:
-        st.markdown("<div class='lg-lbl'>🪪 Employee Code</div>",unsafe_allow_html=True)
-        ec_in=st.text_input("ec",placeholder="e.g. EMP001",key="ec_in",label_visibility="collapsed")
-        st.markdown("<div class='lg-lbl'>🔒 Password</div>",unsafe_allow_html=True)
-        ep=st.text_input("ep",type="password",placeholder="Password",key="ep_in",label_visibility="collapsed")
-        st.markdown("<div style='height:6px'></div>",unsafe_allow_html=True)
-        if st.button("Sign in →",type="primary",use_container_width=True):
-            if not ec_in or not ep: st.error("Enter both fields.")
-            else:
-                df=st.session_state.edf
-                m=df[(df["EmployeeCode"].astype(str).str.strip()==ec_in.strip())&(df["Password"].astype(str).str.strip()==ep.strip())] if "EmployeeCode" in df.columns else pd.DataFrame()
-                if not m.empty:
-                    st.session_state.update(li=True,role="employee",ec=str(m.iloc[0]["EmployeeCode"]),en=m.iloc[0]["EmployeeName"],pg="Home"); st.rerun()
-                else: st.error("❌ Incorrect credentials.")
-
-    st.markdown("</div>",unsafe_allow_html=True)
+    st.markdown("</div>", unsafe_allow_html=True)
     st.stop()
 
-# ── App shell ─────────────────────────────────────────────
-role=st.session_state.role; emp_code=st.session_state.ec
-emp_name=st.session_state.en; page=st.session_state.pg
+# ====================== MAIN APP ======================
+role     = st.session_state.role
+emp_code = st.session_state.emp_code
+emp_name = st.session_state.emp_name
+page     = st.session_state.page
 
-render_shell(emp_name,role,page)
-st.markdown("<div class='page-pad'>",unsafe_allow_html=True)
+# ── Top nav rendering + page switcher ──────────────────────────
+render_topnav(emp_name, role, page)
 
-
-# ══════════════════════════════════════════════════════════
-#  ADMIN PAGES
-# ══════════════════════════════════════════════════════════
-if role=="admin":
-    tp=int((st.session_state.pdf["VisitDate"]==date.today()).sum()) if "VisitDate" in st.session_state.pdf.columns else 0
-
-    if page=="Home":
-        st.markdown(f"""
-        <div class="greeting">
-          <div class="g-hi">Admin Dashboard 📊</div>
-          <div class="g-sub">Full overview of all field activity</div>
-          <div class="g-date">{date.today().strftime('%A, %d %B %Y')}</div>
-        </div>""",unsafe_allow_html=True)
-
-        stat_cards([
-            ("linear-gradient(90deg,#4f46e5,#7c3aed)","👥",len(st.session_state.edf),"Employees","Active team","#4f46e5"),
-            ("linear-gradient(90deg,#06b6d4,#0284c7)","🏪",len(st.session_state.gdf),"Stores","Total stores","#0891b2"),
-            ("linear-gradient(90deg,#f59e0b,#d97706)","📋",len(st.session_state.pdf),"All Plans","Total visits","#d97706"),
-            ("linear-gradient(90deg,#10b981,#059669)","📍",tp,"Today","Visits today","#059669"),
-        ])
-
-        c1,c2=st.columns([3,2])
-        with c1:
-            st.markdown("<div class='sec-hd'>📋 Recent Plans</div>",unsafe_allow_html=True)
-            if not st.session_state.pdf.empty:
-                ds=st.session_state.pdf.sort_values("VisitDate",ascending=False) if "VisitDate" in st.session_state.pdf.columns else st.session_state.pdf
-                st.dataframe(ds.head(10),use_container_width=True,hide_index=True)
-            else: empty("📋","No plans yet","Plans appear once employees start planning.")
-        with c2:
-            st.markdown("<div class='sec-hd'>👥 Team</div>",unsafe_allow_html=True)
-            disp=st.session_state.edf.drop(columns=["Password"],errors="ignore")
-            if not disp.empty: st.dataframe(disp,use_container_width=True,hide_index=True)
-            else: empty("👥","No employees","Add employees to get started.")
-
-        st.markdown("<div style='height:10px'></div>",unsafe_allow_html=True)
-        if st.button("🚪  Sign Out",use_container_width=True,key="so_a"):
-            for k,v in DEF.items(): st.session_state[k]=v
-            st.rerun()
-
-    elif page=="Employees":
-        phdr("👥 Employees","Manage your field team members")
-        t1,t2,t3=st.tabs(["  View All  ","  Add  ","  Remove  "])
-
-        with t1:
-            disp=st.session_state.edf.drop(columns=["Password"],errors="ignore")
-            if not disp.empty:
-                st.caption(f"{len(disp)} employees in system")
-                st.dataframe(disp,use_container_width=True,hide_index=True)
-            else: empty("👥","No employees yet","Use Add tab to add team members.")
-
-        with t2:
-            ib("Employee code must be unique. They'll use code + password to log in.")
-            with st.form("ae",clear_on_submit=True):
-                c1,c2=st.columns(2)
-                with c1:
-                    ec2=st.text_input("Employee Code *",placeholder="e.g. EMP042")
-                    en2=st.text_input("Full Name *",placeholder="e.g. Ramesh Kumar")
-                with c2:
-                    ep2=st.text_input("Password *",type="password",placeholder="Set a password")
-                    st.markdown("<div style='height:27px'></div>",unsafe_allow_html=True)
-                if st.form_submit_button("➕  Add Employee",type="primary",use_container_width=True):
-                    if not ec2 or not en2 or not ep2: st.error("All fields required.")
-                    elif sc(st.session_state.edf,"EmployeeCode").astype(str).str.upper().eq(ec2.strip().upper()).any(): st.error(f"Code '{ec2.upper()}' exists.")
-                    else:
-                        nr=pd.DataFrame([{"EmployeeCode":ec2.strip().upper(),"EmployeeName":en2.strip().title(),"Password":ep2.strip()}])
-                        st.session_state.edf=pd.concat([st.session_state.edf,nr],ignore_index=True)
-                        if save_sb("employee_master",st.session_state.edf): st.success(f"✅ {en2.strip().title()} added!"); st.rerun()
-
-        with t3:
-            if st.session_state.edf.empty: empty("👥","No employees to remove","")
-            else:
-                wb("Removing an employee is permanent.")
-                ed=st.selectbox("Select employee",sc(st.session_state.edf,"EmployeeCode").unique())
-                row=st.session_state.edf[sc(st.session_state.edf,"EmployeeCode")==ed]
-                nm=sc(row,"EmployeeName").iloc[0] if not row.empty else ed
-                st.markdown(f"<div class='si'><div class='si-av av-r'>👤</div><div><div class='si-nm'>{nm}</div><div class='si-mt'>{ed}</div></div></div>",unsafe_allow_html=True)
-                if st.button("🗑  Confirm Remove",type="primary",use_container_width=True,key="de"):
-                    st.session_state.edf=st.session_state.edf[sc(st.session_state.edf,"EmployeeCode")!=ed]
-                    if save_sb("employee_master",st.session_state.edf): st.success(f"✅ {nm} removed."); st.rerun()
-
-    elif page=="Stores":
-        phdr("🏪 Stores","Manage your store master list")
-        t1,t2,t3=st.tabs(["  View All  ","  Add  ","  Remove  "])
-
-        with t1:
-            if not st.session_state.gdf.empty:
-                cities=["All"]+sorted(sc(st.session_state.gdf,"City").dropna().unique().tolist())
-                cf=st.selectbox("Filter by city",cities)
-                ds=st.session_state.gdf if cf=="All" else st.session_state.gdf[sc(st.session_state.gdf,"City")==cf]
-                st.caption(f"{len(ds)} stores")
-                st.dataframe(ds,use_container_width=True,hide_index=True)
-            else: empty("🏪","No stores yet","Use Add tab to add stores.")
-
-        with t2:
-            ib("GSTIN format: <b>22AAAAA0000A1Z5</b> (15 chars)")
-            with st.form("as2",clear_on_submit=True):
-                c1,c2=st.columns(2)
-                with c1:
-                    sn=st.text_input("Store Name *",placeholder="e.g. Reliance Fresh")
-                    gs=st.text_input("GST Number *",max_chars=15,placeholder="22AAAAA0000A1Z5")
-                with c2:
-                    cy=st.text_input("City *",placeholder="e.g. Lucknow")
-                    eo=sc(st.session_state.edf,"EmployeeCode").unique().tolist() or ["—"]
-                    es=st.selectbox("Assign to Employee *",eo)
-                if st.form_submit_button("➕  Add Store",type="primary",use_container_width=True):
-                    g=gs.strip().upper()
-                    if not sn or not g or not cy: st.error("All fields required.")
-                    elif not gstin_ok(g): st.error("Invalid GSTIN. Example: 22AAAAA0000A1Z5")
-                    elif sc(st.session_state.gdf,"GSTNumber").astype(str).str.upper().eq(g).any(): st.error(f"GST '{g}' exists.")
-                    else:
-                        nid=f"S{len(st.session_state.gdf)+1:05d}"
-                        ns=pd.DataFrame([{"StoreID":nid,"StoreName":sn.strip().title(),"GSTNumber":g,"City":cy.strip().title(),"EmployeeCode":es}])
-                        st.session_state.gdf=pd.concat([st.session_state.gdf,ns],ignore_index=True)
-                        if save_sb("gst_master",st.session_state.gdf): st.success(f"✅ {sn.strip().title()} added!"); st.rerun()
-
-        with t3:
-            if st.session_state.gdf.empty: empty("🏪","No stores to remove","")
-            else:
-                wb("Removing a store is permanent.")
-                sd=st.selectbox("Select store",sc(st.session_state.gdf,"StoreID").unique())
-                row=st.session_state.gdf[sc(st.session_state.gdf,"StoreID")==sd]
-                snm=sc(row,"StoreName").iloc[0] if not row.empty else sd
-                st.markdown(f"<div class='si'><div class='si-av av-r'>🏪</div><div><div class='si-nm'>{snm}</div><div class='si-mt'>{sd}</div></div></div>",unsafe_allow_html=True)
-                if st.button("🗑  Confirm Remove",type="primary",use_container_width=True,key="ds"):
-                    st.session_state.gdf=st.session_state.gdf[sc(st.session_state.gdf,"StoreID")!=sd]
-                    if save_sb("gst_master",st.session_state.gdf): st.success(f"✅ {snm} removed."); st.rerun()
-
-    elif page=="View Plans":
-        phdr("📋 View Plans","Browse and filter all employee beat plans")
-        with st.expander("🔍 Filters",expanded=True):
-            c1,c2,c3=st.columns(3)
-            with c1: fe=st.selectbox("Employee",["All"]+list(sc(st.session_state.pdf,"EmployeeName").dropna().unique()))
-            with c2: fc=st.selectbox("City",["All"]+list(sc(st.session_state.pdf,"City").dropna().unique()))
-            with c3: dr=st.date_input("Date Range",value=(date.today()-timedelta(days=30),date.today()))
-
-        fp=st.session_state.pdf.copy()
-        if fe!="All" and "EmployeeName" in fp.columns: fp=fp[fp["EmployeeName"]==fe]
-        if fc!="All" and "City" in fp.columns: fp=fp[fp["City"]==fc]
-        if isinstance(dr,(list,tuple)) and len(dr)==2 and "VisitDate" in fp.columns:
-            fp=fp[(fp["VisitDate"]>=dr[0])&(fp["VisitDate"]<=dr[1])]
-
-        c1,c2,c3,c4=st.columns(4)
-        c1.metric("Plans",len(fp)); c2.metric("Employees",sc(fp,"EmployeeName").nunique())
-        c3.metric("Cities",sc(fp,"City").nunique()); c4.metric("Stores",sc(fp,"Store").nunique())
-        st.markdown("<div style='height:8px'></div>",unsafe_allow_html=True)
-        if not fp.empty:
-            st.dataframe(fp.sort_values("VisitDate",ascending=False) if "VisitDate" in fp.columns else fp,use_container_width=True,hide_index=True)
-            dl_btn(fp,"adl","Beat_Plan_Admin")
-        else: empty("📋","No matching plans","Adjust the filters above.")
-
-    elif page=="Refresh":
-        phdr("🔄 Sync Data","Pull latest records from Supabase")
-        ib("Refreshes all tables: Employees, Stores, Plans and Admin.")
-        c1,_=st.columns([1,2])
-        with c1:
-            if st.button("🔄  Refresh Now",type="primary",use_container_width=True):
-                with st.spinner("Syncing…"):
-                    st.session_state.edf=load_sb("employee_master",EC)
-                    st.session_state.gdf=load_sb("gst_master",GC)
-                    st.session_state.pdf=load_sb("planned_visits",PC)
-                    st.session_state.adf=load_sb("admin_master",AC)
-                st.success("✅ All data refreshed!"); st.rerun()
-
-
-# ══════════════════════════════════════════════════════════
-#  EMPLOYEE PAGES
-# ══════════════════════════════════════════════════════════
+# Top nav page switching (using st.columns with invisible buttons mapped to pages)
+if role == "admin":
+    nav_pages = ["Dashboard","Employees","Stores","View Plans","Refresh"]
 else:
-    my_stores=st.session_state.gdf[sc(st.session_state.gdf,"EmployeeCode").astype(str)==str(emp_code)] if not st.session_state.gdf.empty else pd.DataFrame(columns=GC)
-    my_plans=st.session_state.pdf[sc(st.session_state.pdf,"EmployeeCode").astype(str)==str(emp_code)]
+    nav_pages = ["Dashboard","Beat Plan","My Plans","Analytics"]
 
-    if page=="Home":
-        hour=dt_mod.datetime.now().hour
-        greet="Good morning" if hour<12 else "Good afternoon" if hour<17 else "Good evening"
-        first=emp_name.split()[0]
-
-        st.markdown(f"""
-        <div class="greeting">
-          <div class="g-hi">{greet}, {first}! 👋</div>
-          <div class="g-sub">Ready to plan your store visits?</div>
-          <div class="g-date">{date.today().strftime('%A, %d %B %Y')}</div>
-        </div>""",unsafe_allow_html=True)
-
-        tp2=my_plans[my_plans["VisitDate"]==date.today()] if "VisitDate" in my_plans.columns else pd.DataFrame()
-        tm=my_plans[pd.to_datetime(sc(my_plans,"VisitDate"),errors="coerce").dt.month==date.today().month] if "VisitDate" in my_plans.columns else pd.DataFrame()
-
-        stat_cards([
-            ("linear-gradient(90deg,#4f46e5,#7c3aed)","🏪",len(my_stores),"My Stores",f"{sc(my_stores,'City').nunique()} cities","#4f46e5"),
-            ("linear-gradient(90deg,#10b981,#059669)","📍",len(tp2),"Today","Max 10/day","#059669"),
-            ("linear-gradient(90deg,#f59e0b,#d97706)","📅",len(tm),"This Month",date.today().strftime("%b %Y"),"#d97706"),
-            ("linear-gradient(90deg,#06b6d4,#0284c7)","📋",len(my_plans),"All Plans","All time","#0891b2"),
-        ])
-
-        # Quick actions
-        st.markdown("<div class='sec-hd'>Quick Actions</div>",unsafe_allow_html=True)
-        st.markdown("""
-        <div class="qa-row">
-          <div class="qa-card"><div class="qa-ico" style="background:#eef2ff;">🎯</div><div class="qa-lbl">New Beat Plan</div><div class="qa-dsc">Plan today's visits</div></div>
-          <div class="qa-card"><div class="qa-ico" style="background:#f0fdf4;">📅</div><div class="qa-lbl">My Plans</div><div class="qa-dsc">All scheduled visits</div></div>
-          <div class="qa-card"><div class="qa-ico" style="background:#fffbeb;">➕</div><div class="qa-lbl">Add Store</div><div class="qa-dsc">Request new store</div></div>
-        </div>""",unsafe_allow_html=True)
-        qa1,qa2,qa3=st.columns(3)
-        with qa1:
-            if st.button("🎯  New Beat Plan",use_container_width=True,key="qa1"): go("Beat Plan")
-        with qa2:
-            if st.button("📅  My Plans",use_container_width=True,key="qa2"): go("My Plans")
-        with qa3:
-            if st.button("➕  Add Store",use_container_width=True,key="qa3"): go("Add Store")
-
-        st.markdown("<div style='height:6px'></div>",unsafe_allow_html=True)
-
-        cl,cr=st.columns(2)
-        with cl:
-            pn=len(tp2); col=pc_color(pn); pct=min(pn*10,100)
-            st.markdown("<div class='sec-hd'>📍 Today's Plan</div>",unsafe_allow_html=True)
-            st.markdown(f"""
-            <div class="card">
-              <div class="prog-row">
-                <span class="prog-lbl">Progress</span>
-                <span class="prog-num" style="color:{col};">{pn}/10</span>
-              </div>
-              <div class="prog-track"><div class="prog-fill" style="width:{pct}%;background:{col};"></div></div>
-              <div class="prog-hint">{"🚫 Daily limit reached" if pn>=10 else f"✅ {10-pn} more store(s) available"}</div>
-            </div>""",unsafe_allow_html=True)
-            if not tp2.empty:
-                for _,row in tp2.iterrows():
-                    st.markdown(f"""
-                    <div class="si">
-                      <div class="si-av av-g">✓</div>
-                      <div style="flex:1;min-width:0;"><div class="si-nm">{row.get('Store','—')}</div><div class="si-mt">{row.get('City','—')}</div></div>
-                      <span class="bdg bg">Planned</span>
-                    </div>""",unsafe_allow_html=True)
-            else: empty("📍","Nothing planned today","Tap New Beat Plan to start.")
-
-        with cr:
-            st.markdown("<div class='sec-hd'>📆 Upcoming</div>",unsafe_allow_html=True)
-            if "VisitDate" in st.session_state.pdf.columns:
-                up=st.session_state.pdf[(sc(st.session_state.pdf,"EmployeeCode").astype(str)==str(emp_code))&(st.session_state.pdf["VisitDate"]>date.today())].sort_values("VisitDate")
-                if up.empty: empty("📆","No upcoming visits","Plan visits in Beat Plan.")
-                else:
-                    for vd in sorted(up["VisitDate"].unique())[:4]:
-                        pl=up[up["VisitDate"]==vd]
-                        cities=", ".join(sorted(sc(pl,"City").dropna().unique().tolist()))
-                        stores=sc(pl,"Store").dropna().unique().tolist()
-                        tl_item(vd,len(pl),cities,stores,False)
-
-        st.markdown("<div style='height:10px'></div>",unsafe_allow_html=True)
-        if st.button("🚪  Sign Out",use_container_width=True,key="so_e"):
-            for k,v in DEF.items(): st.session_state[k]=v
+cols_nav = st.columns(len(nav_pages) + 3)
+for i, p in enumerate(nav_pages):
+    with cols_nav[i]:
+        if st.button(p, key=f"nav_{p}", use_container_width=True):
+            st.session_state.page = p
             st.rerun()
 
-    elif page=="Beat Plan":
-        phdr("🎯 Beat Plan","Add stores to your daily visit list")
-        if my_stores.empty:
-            empty("⚠️","No stores assigned","Contact your admin to assign stores.")
+# Extra employee pages via sidebar-style selectbox (hidden but accessible)
+if role == "employee":
+    with st.sidebar:
+        extra = st.radio("Extra", ["➕ Add Store","📆 Upcoming"], label_visibility="collapsed")
+        if st.button("Go", key="go_extra"):
+            st.session_state.page = extra.split(" ",1)[1].strip()
+            st.rerun()
+        if st.button("🚪 Sign out", use_container_width=True, key="logout_side"):
+            for k,v in {"logged_in":False,"role":"","emp_code":"","emp_name":"","page":"Dashboard","selected_cities":[]}.items():
+                st.session_state[k] = v
+            st.rerun()
+else:
+    with st.sidebar:
+        if st.button("🚪 Sign out", use_container_width=True, key="logout_side"):
+            for k,v in {"logged_in":False,"role":"","emp_code":"","emp_name":"","page":"Dashboard","selected_cities":[]}.items():
+                st.session_state[k] = v
+            st.rerun()
+
+# Re-read page after potential rerun
+page = st.session_state.page
+
+# ====================== ADMIN PAGES ======================
+if role == "admin":
+
+    today_plans = int((st.session_state.planned_df["VisitDate"] == date.today()).sum()) \
+        if "VisitDate" in st.session_state.planned_df.columns else 0
+
+    # ── DASHBOARD ─────────────────────────────────────────────────
+    if page == "Dashboard":
+        render_stat_cards([
+            ("#4f46e5","#eef2ff","#4f46e5","👥", len(st.session_state.employee_df), "Total employees", "↑ 3 this month",  "#10b981"),
+            ("#06b6d4","#ecfeff","#0891b2","🏪", len(st.session_state.gst_df),      "Total stores",    "↑ 8 new stores",  "#10b981"),
+            ("#f59e0b","#fffbeb","#d97706","📋", len(st.session_state.planned_df),  "Total plans",     "↑ 47 this week",  "#10b981"),
+            ("#10b981","#d1fae5","#059669","📍", today_plans,                        "Today's visits",  "Across cities",   "#9ca3af"),
+        ])
+        st.markdown("<div class='sec-head'>Recent plans</div>", unsafe_allow_html=True)
+        df_show = st.session_state.planned_df.sort_values("VisitDate",ascending=False).head(10) \
+            if "VisitDate" in st.session_state.planned_df.columns else st.session_state.planned_df.head(10)
+        st.dataframe(df_show, use_container_width=True, hide_index=True) if not df_show.empty else st.info("No plans yet.")
+
+    # ── EMPLOYEES ─────────────────────────────────────────────────
+    elif page == "Employees":
+        st.markdown("<div class='sec-head'>👥 Employees</div>", unsafe_allow_html=True)
+        tab1, tab2, tab3 = st.tabs(["  View  ","  Add  ","  Delete  "])
+        with tab1:
+            disp = st.session_state.employee_df.drop(columns=["Password"], errors="ignore")
+            st.dataframe(disp, use_container_width=True, hide_index=True) if not disp.empty else st.info("No employees found.")
+        with tab2:
+            with st.form("add_emp"):
+                c1,c2 = st.columns(2)
+                with c1:
+                    ecode = st.text_input("Employee Code *", placeholder="e.g. EMP042")
+                    ename = st.text_input("Employee Name *", placeholder="Full name")
+                with c2:
+                    epwd = st.text_input("Password *", type="password", placeholder="Set a password")
+                    st.markdown("<div style='height:27px'></div>", unsafe_allow_html=True)
+                if st.form_submit_button("Add employee", type="primary"):
+                    if not ecode or not ename or not epwd:
+                        st.error("All fields are required.")
+                    elif safe_col(st.session_state.employee_df,"EmployeeCode").astype(str).str.upper().eq(ecode.strip().upper()).any():
+                        st.error("That employee code already exists.")
+                    else:
+                        new_row = pd.DataFrame([{"EmployeeCode":ecode.strip().upper(),"EmployeeName":ename.strip().title(),"Password":epwd.strip()}])
+                        st.session_state.employee_df = pd.concat([st.session_state.employee_df,new_row],ignore_index=True)
+                        if save_to_supabase("employee_master", st.session_state.employee_df):
+                            st.success("Employee added.")
+                            st.rerun()
+        with tab3:
+            if st.session_state.employee_df.empty:
+                st.info("No employees.")
+            else:
+                emp_del = st.selectbox("Select employee to delete", safe_col(st.session_state.employee_df,"EmployeeCode").unique())
+                if st.button("Delete employee", type="primary"):
+                    st.session_state.employee_df = st.session_state.employee_df[safe_col(st.session_state.employee_df,"EmployeeCode") != emp_del]
+                    if save_to_supabase("employee_master", st.session_state.employee_df):
+                        st.success(f"{emp_del} removed.")
+                        st.rerun()
+
+    # ── STORES ────────────────────────────────────────────────────
+    elif page == "Stores":
+        st.markdown("<div class='sec-head'>🏪 Stores</div>", unsafe_allow_html=True)
+        tab1, tab2, tab3 = st.tabs(["  View  ","  Add  ","  Delete  "])
+        with tab1:
+            st.dataframe(st.session_state.gst_df, use_container_width=True, hide_index=True) if not st.session_state.gst_df.empty else st.info("No stores.")
+        with tab2:
+            with st.form("add_store"):
+                c1,c2 = st.columns(2)
+                with c1:
+                    sname = st.text_input("Store Name *", placeholder="e.g. Reliance Fresh")
+                    gstno = st.text_input("GST Number *", max_chars=15, placeholder="22AAAAA0000A1Z5")
+                with c2:
+                    city    = st.text_input("City *", placeholder="e.g. Lucknow")
+                    emp_opts= safe_col(st.session_state.employee_df,"EmployeeCode").unique().tolist() or ["—"]
+                    emp_sel = st.selectbox("Assign to employee *", emp_opts)
+                if st.form_submit_button("Add store", type="primary"):
+                    gc = gstno.strip().upper()
+                    if not sname or not gc or not city: st.error("All fields required.")
+                    elif not is_valid_gstin(gc): st.error("Invalid GST number.")
+                    elif safe_col(st.session_state.gst_df,"GSTNumber").astype(str).str.upper().eq(gc).any(): st.error("GST already exists.")
+                    else:
+                        nid = f"S{len(st.session_state.gst_df)+1:05d}"
+                        new_store = pd.DataFrame([{"StoreID":nid,"StoreName":sname.strip().title(),"GSTNumber":gc,"City":city.strip().title(),"EmployeeCode":emp_sel}])
+                        st.session_state.gst_df = pd.concat([st.session_state.gst_df,new_store],ignore_index=True)
+                        if save_to_supabase("gst_master", st.session_state.gst_df):
+                            st.success("Store added.")
+                            st.rerun()
+        with tab3:
+            if st.session_state.gst_df.empty: st.info("No stores.")
+            else:
+                sdel = st.selectbox("Select store to delete", safe_col(st.session_state.gst_df,"StoreID").unique())
+                if st.button("Delete store", type="primary"):
+                    st.session_state.gst_df = st.session_state.gst_df[safe_col(st.session_state.gst_df,"StoreID") != sdel]
+                    if save_to_supabase("gst_master", st.session_state.gst_df):
+                        st.success(f"{sdel} removed.")
+                        st.rerun()
+
+    # ── VIEW PLANS ────────────────────────────────────────────────
+    elif page == "View Plans":
+        st.markdown("<div class='sec-head'>📋 All Visit Plans</div>", unsafe_allow_html=True)
+        c1,c2,c3 = st.columns(3)
+        with c1: femp  = st.selectbox("Employee", ["All"]+list(safe_col(st.session_state.planned_df,"EmployeeName").dropna().unique()))
+        with c2: fcity = st.selectbox("City",     ["All"]+list(safe_col(st.session_state.planned_df,"City").dropna().unique()))
+        with c3: drange= st.date_input("Date range", value=(date.today()-timedelta(days=30), date.today()))
+        fp = st.session_state.planned_df.copy()
+        if femp !="All" and "EmployeeName" in fp.columns: fp = fp[fp["EmployeeName"]==femp]
+        if fcity!="All" and "City"         in fp.columns: fp = fp[fp["City"]==fcity]
+        if isinstance(drange,(list,tuple)) and len(drange)==2 and "VisitDate" in fp.columns:
+            fp = fp[(fp["VisitDate"]>=drange[0])&(fp["VisitDate"]<=drange[1])]
+        st.markdown(f"<div class='sec-head'>Results <span class='sec-cnt'>{len(fp)}</span></div>", unsafe_allow_html=True)
+        st.dataframe(fp.sort_values("VisitDate",ascending=False) if "VisitDate" in fp.columns else fp, use_container_width=True, hide_index=True)
+        download_button(fp,"admin_dl","Beat_Plan_Admin")
+
+    # ── REFRESH ───────────────────────────────────────────────────
+    elif page == "Refresh":
+        st.markdown("<div class='sec-head'>🔄 Refresh Data</div>", unsafe_allow_html=True)
+        st.info("Pull latest data from all Supabase tables.")
+        if st.button("Refresh now", type="primary", use_container_width=True):
+            st.session_state.employee_df = load_from_supabase("employee_master", EMP_COLS)
+            st.session_state.gst_df      = load_from_supabase("gst_master",      GST_COLS)
+            st.session_state.planned_df  = load_from_supabase("planned_visits",  PLAN_COLS)
+            st.session_state.admin_df    = load_from_supabase("admin_master",    ADMIN_COLS)
+            st.success("All data refreshed.")
+            st.rerun()
+
+# ====================== EMPLOYEE PAGES ======================
+else:
+    employee_stores = st.session_state.gst_df[
+        safe_col(st.session_state.gst_df,"EmployeeCode").astype(str) == str(emp_code)
+    ] if not st.session_state.gst_df.empty else pd.DataFrame(columns=GST_COLS)
+
+    # ── DASHBOARD ─────────────────────────────────────────────────
+    if page == "Dashboard":
+        my = st.session_state.planned_df[safe_col(st.session_state.planned_df,"EmployeeCode").astype(str)==str(emp_code)]
+        today_mine = my[my["VisitDate"]==date.today()] if "VisitDate" in my.columns else pd.DataFrame()
+        tm = my[pd.to_datetime(safe_col(my,"VisitDate"),errors="coerce").dt.month==date.today().month] if "VisitDate" in my.columns else pd.DataFrame()
+
+        render_stat_cards([
+            ("#4f46e5","#eef2ff","#4f46e5","🏪", len(employee_stores),              "My stores",      f"In {safe_col(employee_stores,'City').nunique()} cities", "#9ca3af"),
+            ("#06b6d4","#ecfeff","#0891b2","📋", len(my),                            "Total plans",    "↑ All time",     "#10b981"),
+            ("#f59e0b","#fffbeb","#d97706","📅", len(tm),                            "This month",     "Current month",  "#9ca3af"),
+            ("#10b981","#d1fae5","#059669","📍", len(today_mine),                    "Today's visits", f"Max 10 per day", "#9ca3af"),
+        ])
+
+        # Two-column layout: Available stores + Upcoming visits
+        st.markdown("<div class='content-row'>", unsafe_allow_html=True)
+        col_left, col_right = st.columns(2)
+
+        with col_left:
+            daily_plans = st.session_state.planned_df[
+                (safe_col(st.session_state.planned_df,"EmployeeCode").astype(str)==str(emp_code)) &
+                (st.session_state.planned_df["VisitDate"]==date.today())
+            ] if "VisitDate" in st.session_state.planned_df.columns else pd.DataFrame(columns=PLAN_COLS)
+            pc    = len(daily_plans)
+            color = get_prog_color(pc)
+            pct   = min(pc*10, 100)
+
+            st.markdown(f"""
+            <div class="panel-card">
+                <div class="panel-header">
+                    <span class="panel-icon">🏪</span>
+                    Available stores
+                    <span class="panel-badge">{pc} of 10</span>
+                </div>
+                <div class="prog-row">
+                    <span class="prog-label">Daily progress</span>
+                    <span class="prog-count" style="color:{color};">{pc} / 10</span>
+                </div>
+                <div class="prog-bg">
+                    <div class="prog-fill" style="width:{pct}%;background:{color};"></div>
+                </div>
+            </div>""", unsafe_allow_html=True)
+
+            # Store list
+            show_cities = safe_col(employee_stores,"City").unique().tolist()
+            planned_ids = safe_col(daily_plans,"StoreID").tolist()
+            available   = employee_stores[~safe_col(employee_stores,"StoreID").isin(planned_ids)]
+
+            for idx, row in available.head(5).iterrows():
+                col_s, col_b = st.columns([5,1])
+                with col_s:
+                    st.markdown(f"""
+                    <div class="store-item">
+                        <div class="store-icon-wrap si-blue">🏪</div>
+                        <div style="flex:1;min-width:0;">
+                            <div class="store-name-txt">{row.get('StoreName','—')}</div>
+                            <div class="store-meta-txt">{row.get('City','—')} · Lucknow</div>
+                        </div>
+                        <span class="badge badge-green">Available</span>
+                    </div>""", unsafe_allow_html=True)
+                with col_b:
+                    st.markdown("<div style='height:16px'></div>", unsafe_allow_html=True)
+                    if pc < 10 and st.button("+", key=f"dash_add_{idx}"):
+                        new_plan = pd.DataFrame([{
+                            "EmployeeCode": emp_code, "EmployeeName": emp_name,
+                            "City":         row.get("City",""), "Store": row.get("StoreName",""),
+                            "StoreID":      row.get("StoreID",""), "GSTNumber": row.get("GSTNumber",""),
+                            "VisitDate":    date.today(),
+                        }])
+                        st.session_state.planned_df = pd.concat([st.session_state.planned_df, new_plan], ignore_index=True)
+                        if save_to_supabase("planned_visits", st.session_state.planned_df):
+                            st.success(f"Added {row.get('StoreName','')}")
+                            st.rerun()
+
+        with col_right:
+            st.markdown("""
+            <div class="panel-card">
+                <div class="panel-header">
+                    <span class="panel-icon">📅</span>
+                    Upcoming visits
+                </div>
+            </div>""", unsafe_allow_html=True)
+
+            if "VisitDate" in st.session_state.planned_df.columns:
+                upcoming = st.session_state.planned_df[
+                    (safe_col(st.session_state.planned_df,"EmployeeCode").astype(str)==str(emp_code)) &
+                    (st.session_state.planned_df["VisitDate"] >= date.today())
+                ].sort_values("VisitDate")
+
+                if upcoming.empty:
+                    st.info("No upcoming visits scheduled.")
+                else:
+                    for vdate in sorted(upcoming["VisitDate"].unique())[:4]:
+                        plans     = upcoming[upcoming["VisitDate"]==vdate]
+                        is_today  = vdate == date.today()
+                        badge_cls = "today" if is_today else "future"
+                        cities    = ", ".join(sorted(safe_col(plans,"City").dropna().unique().tolist()))
+                        stores    = safe_col(plans,"Store").dropna().unique().tolist()
+                        pills     = "".join(f"<span class='t-pill'>{s}</span>" for s in stores[:3])
+                        if len(stores)>3: pills += f"<span class='t-pill'>+{len(stores)-3}</span>"
+
+                        st.markdown(f"""
+                        <div class="timeline-item">
+                            <div class="t-date-badge {badge_cls}">
+                                <div class="t-day">{vdate.strftime('%d')}</div>
+                                <div class="t-mon">{vdate.strftime('%b')}</div>
+                            </div>
+                            <div>
+                                <div class="t-stores-lbl">{len(plans)} stores planned</div>
+                                <div class="t-city-lbl">{cities}</div>
+                                <div class="t-pills">{pills}</div>
+                            </div>
+                        </div>""", unsafe_allow_html=True)
+            else:
+                st.info("No upcoming visits.")
+
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    # ── BEAT PLAN ─────────────────────────────────────────────────
+    elif page == "Beat Plan":
+        st.markdown("<div class='sec-head'>🎯 New Beat Plan</div>", unsafe_allow_html=True)
+
+        if employee_stores.empty:
+            st.warning("No stores assigned to you yet. Contact your admin.")
             st.stop()
 
-        c1,c2,c3=st.columns([1,2,1])
-        with c1: vd=st.date_input("📅 Visit Date",value=date.today(),key="bd",min_value=date.today()-timedelta(days=7))
+        c1,c2,c3 = st.columns([1,2,1])
+        with c1: visit_date = st.date_input("Visit date", value=date.today(), key="beat_date")
         with c2:
-            co=sorted(sc(my_stores,"City").dropna().unique().tolist())
-            sc2=st.multiselect(f"🌍 Filter Cities (max 3)",co,max_selections=3,key="cms")
+            city_opts  = sorted(safe_col(employee_stores,"City").dropna().unique().tolist())
+            sel_cities = st.multiselect("Filter cities (max 3)", city_opts, max_selections=3, key="city_ms")
         with c3:
-            st.markdown("<div style='height:27px'></div>",unsafe_allow_html=True)
-            if st.button("🔍  Apply",use_container_width=True): st.session_state.sc=sc2; st.rerun()
+            st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
+            if st.button("Load stores", use_container_width=True):
+                st.session_state.selected_cities = sel_cities
 
-        daily=my_plans[my_plans["VisitDate"]==vd] if "VisitDate" in my_plans.columns else pd.DataFrame(columns=PC)
-        pn=len(daily); col=pc_color(pn); pct=min(pn*10,100)
+        daily_plans = st.session_state.planned_df[
+            (safe_col(st.session_state.planned_df,"EmployeeCode").astype(str)==str(emp_code)) &
+            (st.session_state.planned_df["VisitDate"]==visit_date)
+        ] if "VisitDate" in st.session_state.planned_df.columns else pd.DataFrame(columns=PLAN_COLS)
+
+        pc    = len(daily_plans)
+        color = get_prog_color(pc)
+        pct   = min(pc*10, 100)
+        note  = "Daily limit of 10 stores reached." if pc>=10 else f"{10-pc} more store(s) can be added today."
 
         st.markdown(f"""
-        <div class="card">
-          <div class="card-hdr">
-            <div class="card-hdr-ico" style="background:#eef2ff;">📊</div>
-            {vd.strftime('%d %b %Y')} — Progress
-            <span class="card-pill" style="background:{'#fef2f2' if pn>=10 else '#eef2ff'};color:{'#b91c1c' if pn>=10 else '#4338ca'};">{pn}/10</span>
-          </div>
-          <div class="prog-row">
-            <span class="prog-lbl">{"🚫 Limit reached" if pn>=10 else f"✅ {10-pn} more available"}</span>
-            <span class="prog-num" style="color:{col};">{pct}%</span>
-          </div>
-          <div class="prog-track"><div class="prog-fill" style="width:{pct}%;background:{col};"></div></div>
-        </div>""",unsafe_allow_html=True)
+        <div class="panel-card">
+            <div class="panel-header">
+                <span>Daily progress</span>
+                <span class="panel-badge" style="background:{'#fef2f2' if pc>=10 else '#eef2ff'};color:{'#b91c1c' if pc>=10 else '#4338ca'};">{pc} / 10</span>
+            </div>
+            <div class="prog-row">
+                <span class="prog-label">{note}</span>
+                <span class="prog-count" style="color:{color};font-weight:700;">{pc}/10</span>
+            </div>
+            <div class="prog-bg">
+                <div class="prog-fill" style="width:{pct}%;background:{color};"></div>
+            </div>
+        </div>""", unsafe_allow_html=True)
 
-        if not daily.empty:
-            with st.expander(f"✅ Already planned ({pn} stores)"):
-                cols=[c for c in ["Store","City","GSTNumber","StoreID"] if c in daily.columns]
-                st.dataframe(daily[cols],use_container_width=True,hide_index=True)
+        if not daily_plans.empty:
+            with st.expander(f"Already planned · {pc} store(s) for {visit_date}"):
+                show = [c for c in ["Store","City","GSTNumber"] if c in daily_plans.columns]
+                st.dataframe(daily_plans[show], use_container_width=True, hide_index=True)
 
-        if pn<10:
-            show_c=st.session_state.sc or sc(my_stores,"City").unique().tolist()
-            avail=my_stores[sc(my_stores,"City").isin(show_c)&~sc(my_stores,"StoreID").isin(sc(daily,"StoreID").tolist())]
-            st.markdown(f"<div class='sec-hd'>🏪 Available Stores <span class='sec-ct'>{len(avail)}</span></div>",unsafe_allow_html=True)
-            if avail.empty: empty("🎉","All done!","All stores planned for selected cities.")
+        if pc < 10:
+            show_cities = st.session_state.selected_cities or safe_col(employee_stores,"City").unique().tolist()
+            city_stores = employee_stores[safe_col(employee_stores,"City").isin(show_cities)]
+            planned_ids = safe_col(daily_plans,"StoreID").tolist()
+            available   = city_stores[~safe_col(city_stores,"StoreID").isin(planned_ids)]
+
+            st.markdown(f"<div class='sec-head'>Available stores <span class='sec-cnt'>{len(available)}</span></div>", unsafe_allow_html=True)
+
+            if available.empty:
+                st.info("No more stores available for selected cities.")
             else:
-                for idx,row in avail.iterrows():
-                    c1,c2=st.columns([6,1])
-                    with c1:
+                for idx, row in available.iterrows():
+                    col1, col2 = st.columns([6,1])
+                    with col1:
                         st.markdown(f"""
-                        <div class="si">
-                          <div class="si-av av-i">🏪</div>
-                          <div style="flex:1;min-width:0;"><div class="si-nm">{row.get('StoreName','—')}</div><div class="si-mt">{row.get('City','—')} · {row.get('GSTNumber','—')}</div></div>
-                          <span class="bdg bg">Available</span>
-                        </div>""",unsafe_allow_html=True)
-                    with c2:
-                        st.markdown("<div style='height:14px'></div>",unsafe_allow_html=True)
-                        if st.button("➕",key=f"a_{idx}_{vd}",use_container_width=True):
-                            nr=pd.DataFrame([{"EmployeeCode":emp_code,"EmployeeName":emp_name,"City":row.get("City",""),"Store":row.get("StoreName",""),"StoreID":row.get("StoreID",""),"GSTNumber":row.get("GSTNumber",""),"VisitDate":vd}])
-                            st.session_state.pdf=pd.concat([st.session_state.pdf,nr],ignore_index=True)
-                            if save_sb("planned_visits",st.session_state.pdf): st.success(f"✅ {row.get('StoreName','')} added!"); st.rerun()
+                        <div class="store-item">
+                            <div class="store-icon-wrap si-blue">🏪</div>
+                            <div style="flex:1;min-width:0;">
+                                <div class="store-name-txt">{row.get('StoreName','—')}</div>
+                                <div class="store-meta-txt">{row.get('City','—')} &nbsp;·&nbsp; GST: {row.get('GSTNumber','—')}</div>
+                            </div>
+                            <span class="badge badge-green">Available</span>
+                        </div>""", unsafe_allow_html=True)
+                    with col2:
+                        st.markdown("<div style='height:18px'></div>", unsafe_allow_html=True)
+                        if st.button("+ Add", key=f"add_{idx}_{visit_date}"):
+                            new_plan = pd.DataFrame([{
+                                "EmployeeCode": emp_code, "EmployeeName": emp_name,
+                                "City":         row.get("City",""), "Store": row.get("StoreName",""),
+                                "StoreID":      row.get("StoreID",""), "GSTNumber": row.get("GSTNumber",""),
+                                "VisitDate":    visit_date,
+                            }])
+                            st.session_state.planned_df = pd.concat([st.session_state.planned_df, new_plan], ignore_index=True)
+                            if save_to_supabase("planned_visits", st.session_state.planned_df):
+                                st.success(f"{row.get('StoreName','')} added.")
+                                st.rerun()
 
-        st.markdown("<div style='height:8px'></div>",unsafe_allow_html=True)
-        dl_btn(my_plans,"edl",f"Beat_Plan_{emp_code}")
+        st.markdown("---")
+        emp_plans = st.session_state.planned_df[safe_col(st.session_state.planned_df,"EmployeeCode").astype(str)==str(emp_code)]
+        download_button(emp_plans, "emp_dl", f"Beat_Plan_{emp_code}")
 
-    elif page=="My Plans":
-        phdr("📅 My Plans","All your scheduled store visits")
-        if my_plans.empty: empty("📅","No plans yet","Go to Beat Plan to schedule visits.")
+    # ── MY PLANS ──────────────────────────────────────────────────
+    elif page == "My Plans":
+        st.markdown("<div class='sec-head'>📅 My Plans</div>", unsafe_allow_html=True)
+        my = st.session_state.planned_df[safe_col(st.session_state.planned_df,"EmployeeCode").astype(str)==str(emp_code)]
+        if my.empty:
+            st.info("You haven't created any plans yet.")
         else:
-            tm2=my_plans[pd.to_datetime(sc(my_plans,"VisitDate"),errors="coerce").dt.month==date.today().month] if "VisitDate" in my_plans.columns else pd.DataFrame()
-            stat_cards([
-                ("linear-gradient(90deg,#4f46e5,#7c3aed)","📋",len(my_plans),"Total Plans","All time","#4f46e5"),
-                ("linear-gradient(90deg,#10b981,#059669)","📅",len(tm2),"This Month",date.today().strftime("%b"),"#059669"),
-                ("linear-gradient(90deg,#06b6d4,#0284c7)","🌍",sc(my_plans,"City").nunique(),"Cities","Covered","#0891b2"),
-                ("linear-gradient(90deg,#f59e0b,#d97706)","🏪",sc(my_plans,"Store").nunique(),"Stores","Unique","#d97706"),
+            render_stat_cards([
+                ("#4f46e5","#eef2ff","#4f46e5","📋", len(my),                                     "Total plans",   "All time",      "#9ca3af"),
+                ("#06b6d4","#ecfeff","#0891b2","📍", safe_col(my,"City").nunique(),               "Cities covered","—",            "#9ca3af"),
+                ("#f59e0b","#fffbeb","#d97706","📅", len(safe_col(my,"VisitDate").unique()),       "Unique dates",  "—",            "#9ca3af"),
+                ("#10b981","#d1fae5","#059669","🏪", safe_col(my,"Store").nunique(),               "Unique stores", "—",            "#9ca3af"),
             ])
-            with st.expander("🔍 Filter",expanded=False):
-                fc2=st.selectbox("City",["All"]+sorted(sc(my_plans,"City").dropna().unique().tolist()),key="mp_c")
-                fd=st.date_input("From date",value=date.today()-timedelta(days=30),key="mpd")
-            df_mp=my_plans.copy()
-            if fc2!="All" and "City" in df_mp.columns: df_mp=df_mp[df_mp["City"]==fc2]
-            if "VisitDate" in df_mp.columns: df_mp=df_mp[df_mp["VisitDate"]>=fd]
-            st.dataframe(df_mp.sort_values("VisitDate",ascending=False) if "VisitDate" in df_mp.columns else df_mp,use_container_width=True,hide_index=True)
-            dl_btn(df_mp,"mdl",f"My_Plans_{emp_code}")
+            st.dataframe(
+                my.sort_values("VisitDate",ascending=False) if "VisitDate" in my.columns else my,
+                use_container_width=True, hide_index=True)
+            download_button(my, "my_dl", f"My_Plans_{emp_code}")
 
-    elif page=="Upcoming":
-        phdr("📆 Upcoming","Your planned visits from today onwards")
-        if "VisitDate" not in st.session_state.pdf.columns: empty("📆","No upcoming visits","Plan visits in Beat Plan.")
+    # ── ANALYTICS ─────────────────────────────────────────────────
+    elif page == "Analytics":
+        st.markdown("<div class='sec-head'>📊 Analytics</div>", unsafe_allow_html=True)
+        my = st.session_state.planned_df[safe_col(st.session_state.planned_df,"EmployeeCode").astype(str)==str(emp_code)]
+        if my.empty:
+            st.info("No data yet.")
         else:
-            up2=st.session_state.pdf[(sc(st.session_state.pdf,"EmployeeCode").astype(str)==str(emp_code))&(st.session_state.pdf["VisitDate"]>=date.today())].sort_values("VisitDate")
-            if up2.empty: empty("📆","No upcoming visits","Plan visits in Beat Plan.")
+            tm = my[pd.to_datetime(safe_col(my,"VisitDate"),errors="coerce").dt.month==date.today().month] if "VisitDate" in my.columns else pd.DataFrame()
+            render_stat_cards([
+                ("#4f46e5","#eef2ff","#4f46e5","📋", len(my),                       "Total visits",   "All time",   "#9ca3af"),
+                ("#06b6d4","#ecfeff","#0891b2","📍", safe_col(my,"City").nunique(), "Cities",         "—",         "#9ca3af"),
+                ("#f59e0b","#fffbeb","#d97706","🏪", safe_col(my,"Store").nunique(),"Unique stores",  "—",         "#9ca3af"),
+                ("#10b981","#d1fae5","#059669","📅", len(tm),                       "This month",     "Current",   "#9ca3af"),
+            ])
+            st.markdown("---")
+            c1,c2 = st.columns(2)
+            with c1:
+                st.markdown("<div class='sec-head'>Visits by city</div>", unsafe_allow_html=True)
+                if "City" in my.columns: st.bar_chart(my.groupby("City").size(), color="#4f46e5")
+            with c2:
+                st.markdown("<div class='sec-head'>Visits over time</div>", unsafe_allow_html=True)
+                if "VisitDate" in my.columns:
+                    tmp = my.copy()
+                    tmp["Month"] = pd.to_datetime(tmp["VisitDate"],errors="coerce").dt.to_period("M").astype(str)
+                    st.line_chart(tmp.groupby("Month").size(), color="#06b6d4")
+
+    # ── UPCOMING ──────────────────────────────────────────────────
+    elif page == "Upcoming":
+        st.markdown("<div class='sec-head'>📆 Upcoming Visits</div>", unsafe_allow_html=True)
+        if "VisitDate" not in st.session_state.planned_df.columns:
+            st.info("No upcoming visits.")
+        else:
+            upcoming = st.session_state.planned_df[
+                (safe_col(st.session_state.planned_df,"EmployeeCode").astype(str)==str(emp_code)) &
+                (st.session_state.planned_df["VisitDate"] >= date.today())
+            ].sort_values("VisitDate")
+            if upcoming.empty:
+                st.info("No upcoming visits scheduled.")
             else:
-                st.markdown(f'<div class="ib">📅  <b>{len(up2)} visits</b> across <b>{len(up2["VisitDate"].unique())} days</b></div>',unsafe_allow_html=True)
-                for vd in sorted(up2["VisitDate"].unique()):
-                    pl=up2[up2["VisitDate"]==vd]
-                    cities=", ".join(sorted(sc(pl,"City").dropna().unique().tolist()))
-                    stores=sc(pl,"Store").dropna().unique().tolist()
-                    tl_item(vd,len(pl),cities,stores,vd==date.today())
+                for vdate in sorted(upcoming["VisitDate"].unique()):
+                    plans     = upcoming[upcoming["VisitDate"]==vdate]
+                    is_today  = vdate == date.today()
+                    badge_cls = "today" if is_today else "future"
+                    cities    = ", ".join(sorted(safe_col(plans,"City").dropna().unique().tolist()))
+                    stores    = safe_col(plans,"Store").dropna().unique().tolist()
+                    pills     = "".join(f"<span class='t-pill'>{s}</span>" for s in stores[:4])
+                    if len(stores)>4: pills += f"<span class='t-pill'>+{len(stores)-4}</span>"
+                    st.markdown(f"""
+                    <div class="timeline-item">
+                        <div class="t-date-badge {badge_cls}">
+                            <div class="t-day">{vdate.strftime('%d')}</div>
+                            <div class="t-mon">{vdate.strftime('%b')}</div>
+                        </div>
+                        <div>
+                            <div class="t-stores-lbl">{len(plans)} stores planned</div>
+                            <div class="t-city-lbl">{cities}</div>
+                            <div class="t-pills">{pills}</div>
+                        </div>
+                    </div>""", unsafe_allow_html=True)
 
-    elif page=="Analytics":
-        phdr("📈 Analytics","Your personal performance insights")
-        if my_plans.empty: empty("📈","No data yet","Analytics appear once you plan visits.")
-        else:
-            tm3=my_plans[pd.to_datetime(sc(my_plans,"VisitDate"),errors="coerce").dt.month==date.today().month] if "VisitDate" in my_plans.columns else pd.DataFrame()
-            stat_cards([
-                ("linear-gradient(90deg,#4f46e5,#7c3aed)","📋",len(my_plans),"Total Visits","All time","#4f46e5"),
-                ("linear-gradient(90deg,#10b981,#059669)","📅",len(tm3),"This Month",date.today().strftime("%b"),"#059669"),
-                ("linear-gradient(90deg,#06b6d4,#0284c7)","🌍",sc(my_plans,"City").nunique(),"Cities","Covered","#0891b2"),
-                ("linear-gradient(90deg,#f59e0b,#d97706)","🏪",sc(my_plans,"Store").nunique(),"Stores","Unique","#d97706"),
-            ])
-            c1,c2=st.columns(2)
+    # ── ADD STORE ─────────────────────────────────────────────────
+    elif page == "Add Store":
+        st.markdown("<div class='sec-head'>➕ Add New Store</div>", unsafe_allow_html=True)
+        with st.form("store_req"):
+            c1,c2 = st.columns(2)
             with c1:
-                st.markdown("<div class='sec-hd'>Visits by City</div>",unsafe_allow_html=True)
-                if "City" in my_plans.columns: st.bar_chart(my_plans.groupby("City").size(),color="#4f46e5")
+                sname = st.text_input("Store Name *", placeholder="e.g. Big Bazaar")
+                city  = st.text_input("City *",       placeholder="e.g. Lucknow")
             with c2:
-                st.markdown("<div class='sec-hd'>Monthly Trend</div>",unsafe_allow_html=True)
-                if "VisitDate" in my_plans.columns:
-                    tmp=my_plans.copy()
-                    tmp["Month"]=pd.to_datetime(tmp["VisitDate"],errors="coerce").dt.to_period("M").astype(str)
-                    st.line_chart(tmp.groupby("Month").size(),color="#06b6d4")
-            st.markdown("<div class='sec-hd'>Top Stores <span class='sec-ct'>Top 10</span></div>",unsafe_allow_html=True)
-            if "Store" in my_plans.columns:
-                top=my_plans.groupby("Store").agg(Visits=("Store","count"),City=("City","first")).reset_index().sort_values("Visits",ascending=False).head(10)
-                st.dataframe(top,use_container_width=True,hide_index=True)
-
-    elif page=="Add Store":
-        phdr("➕ Add Store","Request a store for your territory")
-        ib("GSTIN format: <b>22AAAAA0000A1Z5</b> (15 characters)")
-        with st.form("sr",clear_on_submit=True):
-            c1,c2=st.columns(2)
-            with c1:
-                sn2=st.text_input("Store Name *",placeholder="e.g. Reliance Fresh")
-                cy2=st.text_input("City *",placeholder="e.g. Lucknow")
-            with c2:
-                gs2=st.text_input("GST Number *",max_chars=15,placeholder="22AAAAA0000A1Z5")
-                st.text_area("Remarks (optional)",height=82,placeholder="Notes for admin…")
-            if st.form_submit_button("➕  Add to My Territory",type="primary",use_container_width=True):
-                g2=gs2.strip().upper()
-                if not sn2 or not cy2 or not g2: st.error("All fields required.")
-                elif not gstin_ok(g2): st.error("Invalid GSTIN. Format: 22AAAAA0000A1Z5")
-                elif sc(st.session_state.gdf,"GSTNumber").astype(str).str.upper().eq(g2).any(): st.error(f"GSTIN '{g2}' exists.")
+                gst = st.text_input("GST Number *", max_chars=15, placeholder="22AAAAA0000A1Z5")
+                st.text_area("Remarks (optional)", height=100, placeholder="Any notes...")
+            if st.form_submit_button("Add store", type="primary"):
+                gc = gst.strip().upper()
+                if not sname or not city or not gc: st.error("All fields are required.")
+                elif not is_valid_gstin(gc): st.error("Invalid GST number.")
+                elif safe_col(st.session_state.gst_df,"GSTNumber").astype(str).str.upper().eq(gc).any(): st.error("GST already exists.")
                 else:
-                    nid=f"S{len(st.session_state.gdf)+1:05d}"
-                    ns=pd.DataFrame([{"StoreID":nid,"StoreName":sn2.strip().title(),"GSTNumber":g2,"City":cy2.strip().title(),"EmployeeCode":emp_code}])
-                    st.session_state.gdf=pd.concat([st.session_state.gdf,ns],ignore_index=True)
-                    if save_sb("gst_master",st.session_state.gdf): st.success(f"✅ {sn2.strip().title()} added!"); st.rerun()
+                    nid = f"S{len(st.session_state.gst_df)+1:05d}"
+                    new_store = pd.DataFrame([{"StoreID":nid,"StoreName":sname.strip().title(),"GSTNumber":gc,"City":city.strip().title(),"EmployeeCode":emp_code}])
+                    st.session_state.gst_df = pd.concat([st.session_state.gst_df,new_store],ignore_index=True)
+                    if save_to_supabase("gst_master", st.session_state.gst_df):
+                        st.success(f"'{sname.title()}' added.")
+                        st.rerun()
 
-# ── Close page wrapper & footer ───────────────────────────
-st.markdown("</div>",unsafe_allow_html=True)
-st.markdown("""
-<div style='text-align:center;font-size:12px;color:#c4c9d9;padding:20px 0 80px;'>
-  Beat Plan Pro · 2026 · Built by Bipin Pandey
-</div>""",unsafe_allow_html=True)
+# ====================== FOOTER ======================
+st.markdown("---")
+st.caption("Beat Plan Pro · 2026 · Built by Bipin Pandey")
