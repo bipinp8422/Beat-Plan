@@ -314,6 +314,41 @@ def section_header(icon, title):
             <div class='section-line'></div>
         </div>""", unsafe_allow_html=True)
 
+def fetch_beat_status_live(sel_date):
+    """
+    Query Supabase DIRECTLY for planned_visits on sel_date.
+    Returns a dict: { employee_code -> store_count }
+    for every employee that has at least one record on that date.
+    This bypasses session_state cache completely.
+    """
+    try:
+        date_str = sel_date.strftime("%Y-%m-%d")
+        # Filter by VisitDate at DB level — only fetch what we need
+        response = (
+            supabase
+            .table("planned_visits")
+            .select("EmployeeCode, VisitDate")
+            .eq("VisitDate", date_str)
+            .execute()
+        )
+        rows = response.data or []
+        # Also try lowercase column variants
+        result = {}
+        for r in rows:
+            ec = (
+                r.get("EmployeeCode")
+                or r.get("employeecode")
+                or r.get("employee_code")
+                or ""
+            )
+            ec = str(ec).strip()
+            if ec:
+                result[ec] = result.get(ec, 0) + 1
+        return result  # { "EMP001": 5, "EMP002": 3, ... }
+    except Exception as e:
+        st.warning(f"⚠️ Live DB check failed: {e}")
+        return {}
+
 # ====================== LOGIN PAGE ======================
 if not st.session_state.logged_in:
     st.markdown("<h1 class='main-header'>🚀 Beat Plan Pro</h1>", unsafe_allow_html=True)
@@ -391,28 +426,27 @@ if st.session_state.role == "admin":
 
     # ── DASHBOARD ──
     if admin_menu == "📊 Dashboard":
-        today_plans = int((st.session_state.planned_df["VisitDate"] == date.today()).sum()) \
-            if "VisitDate" in st.session_state.planned_df.columns else 0
-
-        # compute who has planned today
-        emp_df = st.session_state.employee_df
+        emp_df  = st.session_state.employee_df
         plan_df = st.session_state.planned_df
-        today_emp_codes = set()
-        if "VisitDate" in plan_df.columns and not plan_df.empty:
-            today_emp_codes = set(
-                plan_df[plan_df["VisitDate"] == date.today()]["EmployeeCode"].astype(str).unique()
-            )
-        total_emp = len(emp_df)
-        done_count = len(today_emp_codes)
-        pending_count = total_emp - done_count
+
+        # ── LIVE DB CHECK for today's beat status ──
+        with st.spinner("🔄 Checking today's beat plan status from database…"):
+            live_status = fetch_beat_status_live(date.today())
+            # live_status = { "EMP001": 5, "EMP002": 3 } — only those who submitted
+
+        today_emp_codes = set(live_status.keys())
+        total_emp       = len(emp_df)
+        done_count      = len(today_emp_codes)
+        pending_count   = total_emp - done_count
+        today_total_visits = sum(live_status.values())
 
         cols = st.columns(5)
         cards = [
-            ("blue",   "👥", "Total Employees", total_emp,     "Active accounts"),
+            ("blue",   "👥", "Total Employees", total_emp,          "Active accounts"),
             ("green",  "🏪", "Total Stores",    len(st.session_state.gst_df), "In database"),
-            ("purple", "📋", "Total Plans",     len(plan_df),  "All time"),
-            ("green",  "✅", "Done Today",      done_count,    "Beat plan submitted"),
-            ("red",    "⏳", "Pending Today",   pending_count, "Yet to submit"),
+            ("purple", "📋", "Total Plans",     len(plan_df),       "All time"),
+            ("green",  "✅", "Done Today",      done_count,         "Beat plan submitted"),
+            ("red",    "⏳", "Pending Today",   pending_count,      "Yet to submit"),
         ]
         for col, (color, icon, label, val, sub) in zip(cols, cards):
             with col:
@@ -425,37 +459,33 @@ if st.session_state.role == "admin":
                     </div>""", unsafe_allow_html=True)
 
         st.markdown("---")
-        # Side-by-side today status
         col_done, col_pend = st.columns(2)
 
         with col_done:
-            section_header("✅", f"Done ({done_count})")
-            if "EmployeeCode" in emp_df.columns:
-                done_emps = emp_df[emp_df["EmployeeCode"].astype(str).isin(today_emp_codes)]
-                if done_emps.empty:
-                    st.info("No submissions yet today.")
-                else:
-                    for _, row in done_emps.iterrows():
-                        ec   = str(row.get("EmployeeCode", ""))
-                        en   = row.get("EmployeeName", ec)
-                        cnt  = int((plan_df[
-                            (plan_df["EmployeeCode"].astype(str) == ec) &
-                            (plan_df["VisitDate"] == date.today())
-                        ].shape[0])) if "VisitDate" in plan_df.columns else 0
-                        initials = "".join([w[0] for w in en.split()[:2]]).upper()
-                        st.markdown(f"""
-                            <div class='emp-card'>
-                                <div class='emp-avatar done'>{initials}</div>
-                                <div class='emp-info'>
-                                    <div class='emp-name'>{en}</div>
-                                    <div class='emp-code'>{ec}</div>
-                                    <div class='emp-count'>🏪 {cnt} store(s) planned</div>
-                                </div>
-                                <div class='emp-badge badge-done'>✅ Done</div>
-                            </div>""", unsafe_allow_html=True)
+            section_header("✅", f"Done — {date.today().strftime('%d %b %Y')} ({done_count})")
+            if not today_emp_codes:
+                st.info("No submissions yet today.")
+            else:
+                done_emps = emp_df[emp_df["EmployeeCode"].astype(str).isin(today_emp_codes)] \
+                    if "EmployeeCode" in emp_df.columns else pd.DataFrame()
+                for _, row in done_emps.iterrows():
+                    ec  = str(row.get("EmployeeCode", ""))
+                    en  = row.get("EmployeeName", ec)
+                    cnt = live_status.get(ec, 0)
+                    initials = "".join([w[0] for w in en.split()[:2]]).upper()
+                    st.markdown(f"""
+                        <div class='emp-card'>
+                            <div class='emp-avatar done'>{initials}</div>
+                            <div class='emp-info'>
+                                <div class='emp-name'>{en}</div>
+                                <div class='emp-code'>{ec}</div>
+                                <div class='emp-count'>🏪 {cnt} store(s) in database</div>
+                            </div>
+                            <div class='emp-badge badge-done'>✅ Done</div>
+                        </div>""", unsafe_allow_html=True)
 
         with col_pend:
-            section_header("⏳", f"Pending ({pending_count})")
+            section_header("⏳", f"Pending — {date.today().strftime('%d %b %Y')} ({pending_count})")
             if "EmployeeCode" in emp_df.columns:
                 pend_emps = emp_df[~emp_df["EmployeeCode"].astype(str).isin(today_emp_codes)]
                 if pend_emps.empty:
@@ -471,7 +501,7 @@ if st.session_state.role == "admin":
                                 <div class='emp-info'>
                                     <div class='emp-name'>{en}</div>
                                     <div class='emp-code'>{ec}</div>
-                                    <div class='emp-count'>No plan submitted yet</div>
+                                    <div class='emp-count'>No record found in database</div>
                                 </div>
                                 <div class='emp-badge badge-pending'>⏳ Pending</div>
                             </div>""", unsafe_allow_html=True)
@@ -488,58 +518,112 @@ if st.session_state.role == "admin":
     # ── BEAT PLAN STATUS (dedicated page) ──
     elif admin_menu == "📋 Beat Plan Status":
         st.markdown("### 📋 Beat Plan Status")
+        st.caption("ℹ️ Status is fetched live from the database every time you change the date.")
 
-        sel_date = st.date_input("Select Date", value=date.today())
-        plan_df  = st.session_state.planned_df
         emp_df   = st.session_state.employee_df
+        sel_date = st.date_input("📅 Select Date", value=date.today())
 
-        date_emp_codes = set()
-        if "VisitDate" in plan_df.columns and not plan_df.empty:
-            date_emp_codes = set(
-                plan_df[plan_df["VisitDate"] == sel_date]["EmployeeCode"].astype(str).unique()
-            )
+        # ── LIVE DB QUERY — directly checks planned_visits table ──
+        with st.spinner(f"🔄 Querying database for {sel_date.strftime('%d %b %Y')}…"):
+            live_status = fetch_beat_status_live(sel_date)
+            # live_status = { "EMP001": 5, ... } only employees WITH records on sel_date
+
+        date_emp_codes = set(live_status.keys())
+        done_n    = len(date_emp_codes)
+        pending_n = len(emp_df) - done_n
+
+        # Summary row
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            st.markdown(f"""
+                <div class='metric-card blue'>
+                    <div class='metric-icon'>👥</div>
+                    <div class='metric-label'>Total Employees</div>
+                    <div class='metric-value'>{len(emp_df)}</div>
+                </div>""", unsafe_allow_html=True)
+        with c2:
+            st.markdown(f"""
+                <div class='metric-card green'>
+                    <div class='metric-icon'>✅</div>
+                    <div class='metric-label'>Submitted</div>
+                    <div class='metric-value'>{done_n}</div>
+                    <div class='metric-sub'>Records found in DB</div>
+                </div>""", unsafe_allow_html=True)
+        with c3:
+            st.markdown(f"""
+                <div class='metric-card red'>
+                    <div class='metric-icon'>⏳</div>
+                    <div class='metric-label'>Pending</div>
+                    <div class='metric-value'>{pending_n}</div>
+                    <div class='metric-sub'>No record in DB</div>
+                </div>""", unsafe_allow_html=True)
+
+        st.markdown("---")
 
         tab_done, tab_pend = st.tabs([
-            f"✅ Done ({len(date_emp_codes)})",
-            f"⏳ Pending ({len(emp_df) - len(date_emp_codes)})"
+            f"✅ Done ({done_n})",
+            f"⏳ Pending ({pending_n})"
         ])
 
         with tab_done:
             if not date_emp_codes:
-                st.info("No submissions for this date.")
+                st.info(f"No beat plans found in database for {sel_date.strftime('%d %b %Y')}.")
             else:
-                for _, row in emp_df[emp_df["EmployeeCode"].astype(str).isin(date_emp_codes)].iterrows():
-                    ec = str(row.get("EmployeeCode", ""))
-                    en = row.get("EmployeeName", ec)
-                    emp_plans = plan_df[
-                        (plan_df["EmployeeCode"].astype(str) == ec) &
-                        (plan_df["VisitDate"] == sel_date)
-                    ] if "VisitDate" in plan_df.columns else pd.DataFrame()
+                done_emps = emp_df[emp_df["EmployeeCode"].astype(str).isin(date_emp_codes)] \
+                    if "EmployeeCode" in emp_df.columns else pd.DataFrame()
+                for _, row in done_emps.iterrows():
+                    ec  = str(row.get("EmployeeCode", ""))
+                    en  = row.get("EmployeeName", ec)
+                    cnt = live_status.get(ec, 0)
                     initials = "".join([w[0] for w in en.split()[:2]]).upper()
-                    with st.expander(f"✅ {en}  ({ec}) — {len(emp_plans)} store(s)"):
-                        if not emp_plans.empty:
-                            show_cols = [c for c in ["Store","City","GSTNumber","StoreID"] if c in emp_plans.columns]
-                            st.dataframe(emp_plans[show_cols], use_container_width=True, hide_index=True)
+                    with st.expander(f"✅  {en}  ({ec})  —  {cnt} store(s) in database"):
+                        # Fetch full details for this employee+date live from DB
+                        try:
+                            detail_resp = (
+                                supabase
+                                .table("planned_visits")
+                                .select("*")
+                                .eq("VisitDate", sel_date.strftime("%Y-%m-%d"))
+                                .execute()
+                            )
+                            detail_rows = detail_resp.data or []
+                            if detail_rows:
+                                det_df = pd.DataFrame(detail_rows)
+                                det_df = normalize_columns(det_df)
+                                # filter to this employee
+                                ec_col = "EmployeeCode" if "EmployeeCode" in det_df.columns else None
+                                if ec_col:
+                                    det_df = det_df[det_df[ec_col].astype(str) == ec]
+                                show_cols = [c for c in ["Store","City","GSTNumber","StoreID"] if c in det_df.columns]
+                                if show_cols:
+                                    st.dataframe(det_df[show_cols], use_container_width=True, hide_index=True)
+                                else:
+                                    st.dataframe(det_df, use_container_width=True, hide_index=True)
+                        except Exception as ex:
+                            st.warning(f"Could not load details: {ex}")
 
         with tab_pend:
-            pend_emps = emp_df[~emp_df["EmployeeCode"].astype(str).isin(date_emp_codes)]
-            if pend_emps.empty:
-                st.success("🎉 All employees submitted for this date!")
+            if "EmployeeCode" not in emp_df.columns:
+                st.warning("Employee data not loaded.")
             else:
-                for _, row in pend_emps.iterrows():
-                    ec = str(row.get("EmployeeCode", ""))
-                    en = row.get("EmployeeName", ec)
-                    initials = "".join([w[0] for w in en.split()[:2]]).upper()
-                    st.markdown(f"""
-                        <div class='emp-card'>
-                            <div class='emp-avatar pending'>{initials}</div>
-                            <div class='emp-info'>
-                                <div class='emp-name'>{en}</div>
-                                <div class='emp-code'>{ec}</div>
-                                <div class='emp-count'>Beat plan not submitted</div>
-                            </div>
-                            <div class='emp-badge badge-pending'>⏳ Pending</div>
-                        </div>""", unsafe_allow_html=True)
+                pend_emps = emp_df[~emp_df["EmployeeCode"].astype(str).isin(date_emp_codes)]
+                if pend_emps.empty:
+                    st.success(f"🎉 All employees have submitted for {sel_date.strftime('%d %b %Y')}!")
+                else:
+                    for _, row in pend_emps.iterrows():
+                        ec = str(row.get("EmployeeCode", ""))
+                        en = row.get("EmployeeName", ec)
+                        initials = "".join([w[0] for w in en.split()[:2]]).upper()
+                        st.markdown(f"""
+                            <div class='emp-card'>
+                                <div class='emp-avatar pending'>{initials}</div>
+                                <div class='emp-info'>
+                                    <div class='emp-name'>{en}</div>
+                                    <div class='emp-code'>{ec}</div>
+                                    <div class='emp-count'>No record found in database for this date</div>
+                                </div>
+                                <div class='emp-badge badge-pending'>⏳ Pending</div>
+                            </div>""", unsafe_allow_html=True)
 
     # ── MANAGE EMPLOYEES ──
     elif admin_menu == "👥 Manage Employees":
