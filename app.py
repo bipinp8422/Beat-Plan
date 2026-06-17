@@ -318,36 +318,102 @@ def fetch_beat_status_live(sel_date):
     """
     Query Supabase DIRECTLY for planned_visits on sel_date.
     Returns a dict: { employee_code -> store_count }
-    for every employee that has at least one record on that date.
-    This bypasses session_state cache completely.
+
+    Fetches ALL rows then filters in Python after normalizing column names,
+    so it works regardless of whether Supabase returns 'visitdate', 'visit_date',
+    or 'VisitDate'. The .eq("VisitDate", ...) approach fails when the actual
+    column name in Supabase differs from 'VisitDate'.
     """
     try:
         date_str = sel_date.strftime("%Y-%m-%d")
-        # Filter by VisitDate at DB level — only fetch what we need
-        response = (
-            supabase
-            .table("planned_visits")
-            .select("EmployeeCode, VisitDate")
-            .eq("VisitDate", date_str)
-            .execute()
-        )
-        rows = response.data or []
-        # Also try lowercase column variants
-        result = {}
-        for r in rows:
-            ec = (
-                r.get("EmployeeCode")
-                or r.get("employeecode")
-                or r.get("employee_code")
-                or ""
+        all_rows = []
+        batch_size = 1000
+        offset = 0
+        while True:
+            resp = (
+                supabase
+                .table("planned_visits")
+                .select("*")
+                .range(offset, offset + batch_size - 1)
+                .execute()
             )
-            ec = str(ec).strip()
-            if ec:
-                result[ec] = result.get(ec, 0) + 1
-        return result  # { "EMP001": 5, "EMP002": 3, ... }
+            if not resp.data:
+                break
+            all_rows.extend(resp.data)
+            if len(resp.data) < batch_size:
+                break
+            offset += batch_size
+
+        if not all_rows:
+            return {}
+
+        df = pd.DataFrame(all_rows)
+        df = normalize_columns(df)   # maps any variant -> PascalCase
+
+        if "VisitDate" not in df.columns:
+            st.warning("⚠️ VisitDate column not found in planned_visits table.")
+            return {}
+
+        # Normalize to YYYY-MM-DD string then filter
+        df["VisitDate"] = pd.to_datetime(df["VisitDate"], errors="coerce").dt.strftime("%Y-%m-%d")
+        df_date = df[df["VisitDate"] == date_str]
+
+        result = {}
+        if "EmployeeCode" in df_date.columns:
+            for ec in df_date["EmployeeCode"].astype(str):
+                ec = ec.strip()
+                if ec and ec.lower() != "nan":
+                    result[ec] = result.get(ec, 0) + 1
+
+        return result  # e.g. { "D81436": 7, "D89730": 3 }
+
     except Exception as e:
         st.warning(f"⚠️ Live DB check failed: {e}")
         return {}
+
+
+def fetch_emp_plans_live(emp_code, sel_date):
+    """
+    Fetch full store details for one employee on one date, live from DB.
+    Reuses the same full fetch + Python filter approach.
+    """
+    try:
+        date_str = sel_date.strftime("%Y-%m-%d")
+        all_rows = []
+        batch_size = 1000
+        offset = 0
+        while True:
+            resp = (
+                supabase
+                .table("planned_visits")
+                .select("*")
+                .range(offset, offset + batch_size - 1)
+                .execute()
+            )
+            if not resp.data:
+                break
+            all_rows.extend(resp.data)
+            if len(resp.data) < batch_size:
+                break
+            offset += batch_size
+
+        if not all_rows:
+            return pd.DataFrame()
+
+        df = pd.DataFrame(all_rows)
+        df = normalize_columns(df)
+
+        if "VisitDate" in df.columns:
+            df["VisitDate"] = pd.to_datetime(df["VisitDate"], errors="coerce").dt.strftime("%Y-%m-%d")
+            df = df[df["VisitDate"] == date_str]
+        if "EmployeeCode" in df.columns:
+            df = df[df["EmployeeCode"].astype(str).str.strip() == str(emp_code).strip()]
+
+        return df.reset_index(drop=True)
+
+    except Exception as e:
+        st.warning(f"⚠️ Could not load details: {e}")
+        return pd.DataFrame()
 
 # ====================== LOGIN PAGE ======================
 if not st.session_state.logged_in:
@@ -577,30 +643,13 @@ if st.session_state.role == "admin":
                     cnt = live_status.get(ec, 0)
                     initials = "".join([w[0] for w in en.split()[:2]]).upper()
                     with st.expander(f"✅  {en}  ({ec})  —  {cnt} store(s) in database"):
-                        # Fetch full details for this employee+date live from DB
-                        try:
-                            detail_resp = (
-                                supabase
-                                .table("planned_visits")
-                                .select("*")
-                                .eq("VisitDate", sel_date.strftime("%Y-%m-%d"))
-                                .execute()
-                            )
-                            detail_rows = detail_resp.data or []
-                            if detail_rows:
-                                det_df = pd.DataFrame(detail_rows)
-                                det_df = normalize_columns(det_df)
-                                # filter to this employee
-                                ec_col = "EmployeeCode" if "EmployeeCode" in det_df.columns else None
-                                if ec_col:
-                                    det_df = det_df[det_df[ec_col].astype(str) == ec]
-                                show_cols = [c for c in ["Store","City","GSTNumber","StoreID"] if c in det_df.columns]
-                                if show_cols:
-                                    st.dataframe(det_df[show_cols], use_container_width=True, hide_index=True)
-                                else:
-                                    st.dataframe(det_df, use_container_width=True, hide_index=True)
-                        except Exception as ex:
-                            st.warning(f"Could not load details: {ex}")
+                        det_df = fetch_emp_plans_live(ec, sel_date)
+                        if not det_df.empty:
+                            show_cols = [c for c in ["Store","City","GSTNumber","StoreID","VisitDate"] if c in det_df.columns]
+                            st.dataframe(det_df[show_cols] if show_cols else det_df,
+                                         use_container_width=True, hide_index=True)
+                        else:
+                            st.info("No store details found.")
 
         with tab_pend:
             if "EmployeeCode" not in emp_df.columns:
