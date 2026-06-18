@@ -31,7 +31,6 @@ st.markdown("""
     html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
     .stApp { background: #f0f4f8; }
 
-    /* ── HEADER ── */
     .main-header {
         font-size: 42px; font-weight: 900; letter-spacing: -1.5px;
         background: linear-gradient(135deg, #1a56db 0%, #06b6d4 100%);
@@ -43,7 +42,6 @@ st.markdown("""
         font-weight: 600; margin-bottom: 28px; letter-spacing: 0.5px;
     }
 
-    /* ── METRIC CARDS ── */
     .metric-card {
         background: #ffffff; padding: 22px 20px; border-radius: 18px;
         border: 1.5px solid #e8edf5;
@@ -65,7 +63,6 @@ st.markdown("""
     .metric-value { font-size: 34px; font-weight: 900; color: #0f172a; line-height: 1; }
     .metric-sub   { font-size: 12px; color: #94a3b8; margin-top: 6px; font-weight: 500; }
 
-    /* ── STATUS CARDS (pending / done) ── */
     .emp-card {
         background: #ffffff; border-radius: 14px; padding: 16px 18px;
         margin-bottom: 10px; border: 1.5px solid #e8edf5;
@@ -90,14 +87,12 @@ st.markdown("""
     .badge-pending { background: #fee2e2; color: #991b1b; }
     .emp-count { font-size: 13px; color: #64748b; font-weight: 600; margin-top: 3px; }
 
-    /* ── SECTION HEADER ── */
     .section-head {
         font-size: 15px; font-weight: 800; color: #1e293b; margin: 20px 0 12px;
         display: flex; align-items: center; gap: 8px;
     }
     .section-line { flex: 1; height: 1px; background: #e2e8f0; }
 
-    /* ── STORE CARD ── */
     .store-card {
         background: #ffffff; padding: 16px 20px; border-radius: 14px;
         border: 1.5px solid #e8edf5; box-shadow: 0 1px 6px rgba(0,0,0,0.05);
@@ -111,7 +106,6 @@ st.markdown("""
         margin-right: 8px;
     }
 
-    /* ── PROGRESS BAR ── */
     .progress-wrap {
         background: #ffffff; border-radius: 16px; padding: 20px 22px;
         border: 1.5px solid #e8edf5; box-shadow: 0 1px 6px rgba(0,0,0,0.05);
@@ -121,7 +115,6 @@ st.markdown("""
     .progress-track { height: 10px; background: #f1f5f9; border-radius: 10px; margin: 10px 0 6px; overflow: hidden; }
     .progress-fill  { height: 100%; border-radius: 10px; transition: width .4s ease; }
 
-    /* ── BUTTONS ── */
     .stButton > button {
         border-radius: 10px !important; height: 44px !important;
         font-weight: 700 !important; font-size: 14px !important;
@@ -136,27 +129,22 @@ st.markdown("""
         border: 1.5px solid #fecaca !important; box-shadow: none !important;
     }
 
-    /* ── SIDEBAR ── */
     [data-testid="stSidebar"] {
         background: linear-gradient(180deg, #0f172a 0%, #1e293b 100%) !important;
     }
     [data-testid="stSidebar"] * { color: #e2e8f0 !important; }
     [data-testid="stSidebar"] .stRadio label { font-weight: 600 !important; }
 
-    /* ── SEARCH BOX ── */
     .stTextInput > div > div > input {
         border-radius: 10px !important; border: 1.5px solid #e2e8f0 !important;
         font-size: 14px !important;
     }
 
-    /* ── DATAFRAME ── */
     [data-testid="stDataFrame"] { border-radius: 12px; overflow: hidden; }
 
-    /* ── TAB ── */
     .stTabs [data-baseweb="tab"] { font-weight: 600; }
     .stTabs [data-baseweb="tab-highlight"] { background: #1a56db; }
 
-    /* ── DELETE ROW ── */
     .del-row {
         background: #fff5f5; border: 1.5px solid #fecaca;
         border-radius: 12px; padding: 14px 18px; margin-bottom: 8px;
@@ -216,7 +204,12 @@ def clean_dataframe(df, expected_columns):
         df["VisitDate"] = pd.to_datetime(df["VisitDate"], errors="coerce").dt.date
     return df
 
-def load_from_supabase(table_name, columns):
+def load_from_supabase(table_name, columns, keep_id=False):
+    """
+    Load all rows from a Supabase table.
+    If keep_id=True, the 'id' column is preserved in the returned DataFrame
+    (needed for row-level deletes on planned_visits).
+    """
     try:
         all_rows = []
         batch_size = 1000
@@ -231,13 +224,24 @@ def load_from_supabase(table_name, columns):
             offset += batch_size
         if all_rows:
             df = pd.DataFrame(all_rows)
-            return clean_dataframe(df, columns)
+            df = clean_dataframe(df, columns)
+            # Keep 'id' column if requested and present
+            if keep_id and "id" in df.columns:
+                pass  # retain it
+            elif not keep_id and "id" in df.columns:
+                df = df.drop(columns=["id"])
+            return df
         return pd.DataFrame(columns=columns)
     except Exception as e:
         st.warning(f"⚠️ Error loading `{table_name}`: {e}")
         return pd.DataFrame(columns=columns)
 
-def save_to_supabase(table_name, df):
+# ── SAFE: only replaces master tables (employee, gst, admin) ──
+def save_master_to_supabase(table_name, df):
+    """
+    Full replace for small master tables (employee_master, gst_master, admin_master).
+    NEVER call this for planned_visits.
+    """
     try:
         df_copy = df.copy()
         if "id" in df_copy.columns:
@@ -258,6 +262,42 @@ def save_to_supabase(table_name, df):
         st.error(f"❌ Save failed for `{table_name}`: {e}")
         return False
 
+# ── SAFE: insert a single new planned visit row ──
+def insert_planned_visit(record: dict):
+    """
+    Insert ONE new row into planned_visits.
+    Never deletes existing rows — safe regardless of table size.
+    """
+    try:
+        rec = {k: v for k, v in record.items() if k != "id"}
+        if "VisitDate" in rec:
+            v = rec["VisitDate"]
+            if hasattr(v, "strftime"):
+                rec["VisitDate"] = v.strftime("%Y-%m-%d")
+            else:
+                rec["VisitDate"] = str(v)
+        response = supabase.table("planned_visits").insert(rec).execute()
+        # Return the inserted row's id so we can store it in session state
+        if response.data:
+            return response.data[0].get("id")
+        return None
+    except Exception as e:
+        st.error(f"❌ Insert failed: {e}")
+        return None
+
+# ── SAFE: delete a single planned visit row by its Supabase id ──
+def delete_planned_visit(row_id):
+    """
+    Delete ONE row from planned_visits by primary key.
+    Never touches other rows.
+    """
+    try:
+        supabase.table("planned_visits").delete().eq("id", int(row_id)).execute()
+        return True
+    except Exception as e:
+        st.error(f"❌ Delete failed: {e}")
+        return False
+
 # ====================== COLUMN CONSTANTS ======================
 EMP_COLS   = ["EmployeeCode", "EmployeeName", "Password"]
 GST_COLS   = ["StoreID", "StoreName", "GSTNumber", "City", "EmployeeCode"]
@@ -273,7 +313,8 @@ if "employee_df" not in st.session_state:
 if "gst_df" not in st.session_state:
     st.session_state.gst_df = load_from_supabase("gst_master", GST_COLS)
 if "planned_df" not in st.session_state:
-    st.session_state.planned_df = load_from_supabase("planned_visits", PLAN_COLS)
+    # keep_id=True so we can do row-level deletes
+    st.session_state.planned_df = load_from_supabase("planned_visits", PLAN_COLS, keep_id=True)
 if "admin_df" not in st.session_state:
     st.session_state.admin_df = load_from_supabase("admin_master", ADMIN_COLS)
 
@@ -294,9 +335,11 @@ def safe_col(df, col):
 
 def download_beat_plan_button(df, key, filename_prefix="Beat_Plan"):
     if not df.empty:
+        # Exclude internal 'id' column from download
+        dl_df = df.drop(columns=["id"], errors="ignore")
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine="openpyxl") as writer:
-            df.to_excel(writer, index=False, sheet_name="Beat Plan")
+            dl_df.to_excel(writer, index=False, sheet_name="Beat Plan")
         output.seek(0)
         st.download_button(
             label="📥 Download Beat Plan (Excel)",
@@ -317,12 +360,8 @@ def section_header(icon, title):
 def fetch_beat_status_live(sel_date):
     """
     Query Supabase DIRECTLY for planned_visits on sel_date.
-    Returns a dict: { employee_code -> store_count }
-
-    Fetches ALL rows then filters in Python after normalizing column names,
-    so it works regardless of whether Supabase returns 'visitdate', 'visit_date',
-    or 'VisitDate'. The .eq("VisitDate", ...) approach fails when the actual
-    column name in Supabase differs from 'VisitDate'.
+    Returns dict: { employee_code -> store_count }
+    Fetches ALL rows then filters in Python to handle column name variants.
     """
     try:
         date_str = sel_date.strftime("%Y-%m-%d")
@@ -348,13 +387,12 @@ def fetch_beat_status_live(sel_date):
             return {}
 
         df = pd.DataFrame(all_rows)
-        df = normalize_columns(df)   # maps any variant -> PascalCase
+        df = normalize_columns(df)
 
         if "VisitDate" not in df.columns:
             st.warning("⚠️ VisitDate column not found in planned_visits table.")
             return {}
 
-        # Normalize to YYYY-MM-DD string then filter
         df["VisitDate"] = pd.to_datetime(df["VisitDate"], errors="coerce").dt.strftime("%Y-%m-%d")
         df_date = df[df["VisitDate"] == date_str]
 
@@ -364,8 +402,7 @@ def fetch_beat_status_live(sel_date):
                 ec = ec.strip()
                 if ec and ec.lower() != "nan":
                     result[ec] = result.get(ec, 0) + 1
-
-        return result  # e.g. { "D81436": 7, "D89730": 3 }
+        return result
 
     except Exception as e:
         st.warning(f"⚠️ Live DB check failed: {e}")
@@ -375,7 +412,6 @@ def fetch_beat_status_live(sel_date):
 def fetch_emp_plans_live(emp_code, sel_date):
     """
     Fetch full store details for one employee on one date, live from DB.
-    Reuses the same full fetch + Python filter approach.
     """
     try:
         date_str = sel_date.strftime("%Y-%m-%d")
@@ -445,7 +481,7 @@ if not st.session_state.logged_in:
                             st.session_state.role = "admin"
                             st.rerun()
                         else:
-                            st.error(f"❌ Invalid credentials.")
+                            st.error("❌ Invalid credentials.")
         else:
             st.markdown("### Employee Login")
             emp_in = st.text_input("Employee Code", key="emp_code_login")
@@ -469,7 +505,7 @@ if not st.session_state.logged_in:
                             st.session_state.emp_name  = match.iloc[0]["EmployeeName"]
                             st.rerun()
                         else:
-                            st.error(f"❌ Invalid credentials.")
+                            st.error("❌ Invalid credentials.")
     st.stop()
 
 # ====================== LOGOUT ======================
@@ -495,15 +531,13 @@ if st.session_state.role == "admin":
         emp_df  = st.session_state.employee_df
         plan_df = st.session_state.planned_df
 
-        # ── LIVE DB CHECK for today's beat status ──
         with st.spinner("🔄 Checking today's beat plan status from database…"):
             live_status = fetch_beat_status_live(date.today())
-            # live_status = { "EMP001": 5, "EMP002": 3 } — only those who submitted
 
-        today_emp_codes = set(live_status.keys())
-        total_emp       = len(emp_df)
-        done_count      = len(today_emp_codes)
-        pending_count   = total_emp - done_count
+        today_emp_codes    = set(live_status.keys())
+        total_emp          = len(emp_df)
+        done_count         = len(today_emp_codes)
+        pending_count      = total_emp - done_count
         today_total_visits = sum(live_status.values())
 
         cols = st.columns(5)
@@ -575,13 +609,14 @@ if st.session_state.role == "admin":
         st.markdown("---")
         section_header("📋", "Recent Plans")
         if not plan_df.empty:
-            disp = plan_df.sort_values("VisitDate", ascending=False).head(10) \
-                if "VisitDate" in plan_df.columns else plan_df.head(10)
+            disp = plan_df.drop(columns=["id"], errors="ignore")
+            disp = disp.sort_values("VisitDate", ascending=False).head(10) \
+                if "VisitDate" in disp.columns else disp.head(10)
             st.dataframe(disp, use_container_width=True, hide_index=True)
         else:
             st.info("No plans yet.")
 
-    # ── BEAT PLAN STATUS (dedicated page) ──
+    # ── BEAT PLAN STATUS ──
     elif admin_menu == "📋 Beat Plan Status":
         st.markdown("### 📋 Beat Plan Status")
         st.caption("ℹ️ Status is fetched live from the database every time you change the date.")
@@ -589,16 +624,13 @@ if st.session_state.role == "admin":
         emp_df   = st.session_state.employee_df
         sel_date = st.date_input("📅 Select Date", value=date.today())
 
-        # ── LIVE DB QUERY — directly checks planned_visits table ──
         with st.spinner(f"🔄 Querying database for {sel_date.strftime('%d %b %Y')}…"):
             live_status = fetch_beat_status_live(sel_date)
-            # live_status = { "EMP001": 5, ... } only employees WITH records on sel_date
 
         date_emp_codes = set(live_status.keys())
         done_n    = len(date_emp_codes)
         pending_n = len(emp_df) - done_n
 
-        # Summary row
         c1, c2, c3 = st.columns(3)
         with c1:
             st.markdown(f"""
@@ -641,7 +673,6 @@ if st.session_state.role == "admin":
                     ec  = str(row.get("EmployeeCode", ""))
                     en  = row.get("EmployeeName", ec)
                     cnt = live_status.get(ec, 0)
-                    initials = "".join([w[0] for w in en.split()[:2]]).upper()
                     with st.expander(f"✅  {en}  ({ec})  —  {cnt} store(s) in database"):
                         det_df = fetch_emp_plans_live(ec, sel_date)
                         if not det_df.empty:
@@ -700,7 +731,7 @@ if st.session_state.role == "admin":
                     else:
                         new_row = pd.DataFrame([{"EmployeeCode": ecode.strip().upper(), "EmployeeName": ename.strip().title(), "Password": epwd.strip()}])
                         st.session_state.employee_df = pd.concat([st.session_state.employee_df, new_row], ignore_index=True)
-                        if save_to_supabase("employee_master", st.session_state.employee_df):
+                        if save_master_to_supabase("employee_master", st.session_state.employee_df):
                             st.success("✅ Added!"); st.rerun()
         with tab3:
             if st.session_state.employee_df.empty:
@@ -710,7 +741,7 @@ if st.session_state.role == "admin":
                 if st.button("🗑️ Delete", type="primary"):
                     st.session_state.employee_df = st.session_state.employee_df[
                         safe_col(st.session_state.employee_df, "EmployeeCode") != emp_del]
-                    if save_to_supabase("employee_master", st.session_state.employee_df):
+                    if save_master_to_supabase("employee_master", st.session_state.employee_df):
                         st.success(f"✅ {emp_del} deleted!"); st.rerun()
 
     # ── MANAGE STORES ──
@@ -746,7 +777,7 @@ if st.session_state.role == "admin":
                             pd.DataFrame([{"StoreID": nid, "StoreName": sname.strip().title(),
                                            "GSTNumber": gc, "City": city.strip().title(), "EmployeeCode": emp_sel}])
                         ], ignore_index=True)
-                        if save_to_supabase("gst_master", st.session_state.gst_df):
+                        if save_master_to_supabase("gst_master", st.session_state.gst_df):
                             st.success("✅ Store added!"); st.rerun()
         with tab3:
             if st.session_state.gst_df.empty:
@@ -755,7 +786,7 @@ if st.session_state.role == "admin":
                 sdel = st.selectbox("Select Store", safe_col(st.session_state.gst_df, "StoreID").unique())
                 if st.button("🗑️ Delete Store", type="primary"):
                     st.session_state.gst_df = st.session_state.gst_df[safe_col(st.session_state.gst_df, "StoreID") != sdel]
-                    if save_to_supabase("gst_master", st.session_state.gst_df):
+                    if save_master_to_supabase("gst_master", st.session_state.gst_df):
                         st.success(f"✅ {sdel} deleted!"); st.rerun()
 
     # ── VIEW PLANS ──
@@ -766,7 +797,7 @@ if st.session_state.role == "admin":
         with c2: fcity = st.selectbox("City",     ["All"] + list(safe_col(st.session_state.planned_df, "City").dropna().unique()))
         with c3: drange = st.date_input("Date Range", value=(date.today()-timedelta(days=30), date.today()))
 
-        fp = st.session_state.planned_df.copy()
+        fp = st.session_state.planned_df.drop(columns=["id"], errors="ignore").copy()
         if femp  != "All" and "EmployeeName" in fp.columns: fp = fp[fp["EmployeeName"] == femp]
         if fcity != "All" and "City"         in fp.columns: fp = fp[fp["City"]          == fcity]
         if isinstance(drange, (list, tuple)) and len(drange) == 2 and "VisitDate" in fp.columns:
@@ -783,7 +814,7 @@ if st.session_state.role == "admin":
         if st.button("🔄 Refresh Now", type="primary", use_container_width=True):
             st.session_state.employee_df = load_from_supabase("employee_master", EMP_COLS)
             st.session_state.gst_df      = load_from_supabase("gst_master",      GST_COLS)
-            st.session_state.planned_df  = load_from_supabase("planned_visits",  PLAN_COLS)
+            st.session_state.planned_df  = load_from_supabase("planned_visits",  PLAN_COLS, keep_id=True)
             st.session_state.admin_df    = load_from_supabase("admin_master",    ADMIN_COLS)
             st.success("✅ Refreshed!"); st.rerun()
 
@@ -821,6 +852,7 @@ else:
             if st.button("🔍 Load Stores", use_container_width=True):
                 st.session_state.selected_cities = sel_cities
 
+        # Use session state planned_df (which includes 'id' column)
         daily_plans = st.session_state.planned_df[
             (safe_col(st.session_state.planned_df, "EmployeeCode").astype(str) == str(emp_code)) &
             (st.session_state.planned_df["VisitDate"] == visit_date)
@@ -843,15 +875,13 @@ else:
                 </div>
             </div>""", unsafe_allow_html=True)
 
-        # ── SEARCH BAR ──
         search_query = st.text_input("🔍 Search stores by name, city or GST…", key="store_search", placeholder="e.g. Sharma Medical, Lucknow, 09AAA…")
 
-        show_cities   = st.session_state.selected_cities or safe_col(employee_stores, "City").unique().tolist()
-        city_stores   = employee_stores[safe_col(employee_stores, "City").isin(show_cities)]
-        planned_ids   = safe_col(daily_plans, "StoreID").tolist()
-        available     = city_stores[~safe_col(city_stores, "StoreID").isin(planned_ids)]
+        show_cities = st.session_state.selected_cities or safe_col(employee_stores, "City").unique().tolist()
+        city_stores = employee_stores[safe_col(employee_stores, "City").isin(show_cities)]
+        planned_ids = safe_col(daily_plans, "StoreID").tolist()
+        available   = city_stores[~safe_col(city_stores, "StoreID").isin(planned_ids)]
 
-        # apply search filter
         if search_query.strip():
             q = search_query.strip().lower()
             mask = (
@@ -886,16 +916,26 @@ else:
                     with col2:
                         st.markdown("<br><br>", unsafe_allow_html=True)
                         if st.button("➕ Add", key=f"add_{idx}_{visit_date}"):
-                            new_plan = pd.DataFrame([{
-                                "EmployeeCode": emp_code, "EmployeeName": emp_name,
-                                "City": row.get("City",""), "Store": row.get("StoreName",""),
-                                "StoreID": row.get("StoreID",""), "GSTNumber": row.get("GSTNumber",""),
-                                "VisitDate": visit_date,
-                            }])
-                            st.session_state.planned_df = pd.concat(
-                                [st.session_state.planned_df, new_plan], ignore_index=True)
-                            if save_to_supabase("planned_visits", st.session_state.planned_df):
-                                st.success(f"✅ {row.get('StoreName','')} added!"); st.rerun()
+                            new_record = {
+                                "EmployeeCode": emp_code,
+                                "EmployeeName": emp_name,
+                                "City":         row.get("City", ""),
+                                "Store":        row.get("StoreName", ""),
+                                "StoreID":      row.get("StoreID", ""),
+                                "GSTNumber":    row.get("GSTNumber", ""),
+                                "VisitDate":    visit_date,
+                            }
+                            # ── SAFE INSERT: only adds this one row ──
+                            new_id = insert_planned_visit(new_record)
+                            if new_id is not None:
+                                new_record["id"] = new_id
+                                new_record["VisitDate"] = visit_date  # keep as date object
+                                st.session_state.planned_df = pd.concat(
+                                    [st.session_state.planned_df, pd.DataFrame([new_record])],
+                                    ignore_index=True
+                                )
+                                st.success(f"✅ {row.get('StoreName','')} added!")
+                                st.rerun()
 
         st.markdown("---")
         emp_plans = st.session_state.planned_df[
@@ -917,7 +957,6 @@ else:
 
             st.markdown("---")
 
-            # Filter controls
             col_f1, col_f2 = st.columns(2)
             with col_f1:
                 del_search = st.text_input("🔍 Search my plans…", placeholder="Store name, city…", key="my_plan_search")
@@ -941,7 +980,6 @@ else:
             if filtered.empty:
                 st.info("No plans match the filter.")
             else:
-                # Show with inline delete buttons
                 for i, (idx, row) in enumerate(filtered.iterrows()):
                     col_info, col_del = st.columns([6, 1])
                     with col_info:
@@ -958,10 +996,18 @@ else:
                     with col_del:
                         st.markdown("<br>", unsafe_allow_html=True)
                         if st.button("🗑️", key=f"del_plan_{idx}_{i}", help="Remove this entry"):
-                            st.session_state.planned_df = st.session_state.planned_df.drop(index=idx)
-                            st.session_state.planned_df = st.session_state.planned_df.reset_index(drop=True)
-                            if save_to_supabase("planned_visits", st.session_state.planned_df):
-                                st.success("✅ Entry removed."); st.rerun()
+                            row_id = row.get("id")
+                            if row_id and str(row_id).lower() not in ("", "nan", "none"):
+                                # ── SAFE DELETE: removes only this one row by id ──
+                                if delete_planned_visit(row_id):
+                                    st.session_state.planned_df = st.session_state.planned_df.drop(index=idx).reset_index(drop=True)
+                                    st.success("✅ Entry removed.")
+                                    st.rerun()
+                            else:
+                                # Fallback: no id stored — remove from session only
+                                st.session_state.planned_df = st.session_state.planned_df.drop(index=idx).reset_index(drop=True)
+                                st.warning("⚠️ Removed from session. DB row may persist — refresh data to sync.")
+                                st.rerun()
 
             st.markdown("---")
             download_beat_plan_button(my, "my_dl", f"My_Plans_{emp_code}")
@@ -1043,7 +1089,7 @@ else:
                         pd.DataFrame([{"StoreID": nid, "StoreName": sname.strip().title(),
                                        "GSTNumber": gc, "City": city.strip().title(), "EmployeeCode": emp_code}])
                     ], ignore_index=True)
-                    if save_to_supabase("gst_master", st.session_state.gst_df):
+                    if save_master_to_supabase("gst_master", st.session_state.gst_df):
                         st.success(f"✅ '{sname.title()}' added!"); st.rerun()
 
 # ====================== FOOTER ======================
