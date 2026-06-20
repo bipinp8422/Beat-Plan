@@ -1140,7 +1140,12 @@ else:
         if pend_stores.empty:
             st.success("🎉 You've planned every assigned store at least once!")
         else:
-            search_q = st.text_input("🔍 Search pending stores…", key="pend_store_search", placeholder="Store name, city, GST…")
+            col_search, col_date = st.columns([3, 2])
+            with col_search:
+                search_q = st.text_input("🔍 Search pending stores…", key="pend_store_search", placeholder="Store name, city, GST…")
+            with col_date:
+                plan_for_date = st.date_input("📅 Plan for date", value=date.today(), key="pend_store_plan_date")
+
             view_df = pend_stores.copy()
             if search_q.strip():
                 q = search_q.strip().lower()
@@ -1151,7 +1156,16 @@ else:
                 )
                 view_df = view_df[mask]
 
+            # how many stores are already planned on the chosen date (10/day cap)
+            existing_on_date = st.session_state.planned_df[
+                (safe_col(st.session_state.planned_df, "EmployeeCode").astype(str) == str(emp_code)) &
+                (st.session_state.planned_df["VisitDate"] == plan_for_date)
+            ] if "VisitDate" in st.session_state.planned_df.columns else pd.DataFrame()
+            slots_left = 10 - len(existing_on_date)
+
             section_header("📦", f"Never-Planned Stores ({len(view_df)})")
+            st.caption(f"📅 Adding to **{plan_for_date.strftime('%d %b %Y')}** — {max(slots_left,0)} slot(s) left that day (max 10/day).")
+
             for idx, row in view_df.iterrows():
                 col1, col2 = st.columns([5, 1])
                 with col1:
@@ -1166,7 +1180,9 @@ else:
                         </div>""", unsafe_allow_html=True)
                 with col2:
                     st.markdown("<br><br>", unsafe_allow_html=True)
-                    if st.button("➕ Plan Today", key=f"plan_pending_{idx}"):
+                    if slots_left <= 0:
+                        st.button("🚫 Full", key=f"plan_pending_{idx}", disabled=True)
+                    elif st.button("➕ Plan", key=f"plan_pending_{idx}"):
                         new_record = {
                             "EmployeeCode": emp_code,
                             "EmployeeName": emp_name,
@@ -1174,17 +1190,17 @@ else:
                             "Store":        row.get("StoreName", ""),
                             "StoreID":      row.get("StoreID", ""),
                             "GSTNumber":    row.get("GSTNumber", ""),
-                            "VisitDate":    date.today(),
+                            "VisitDate":    plan_for_date,
                         }
                         new_id = insert_planned_visit(new_record)
                         if new_id is not None:
                             new_record["id"] = new_id
-                            new_record["VisitDate"] = date.today()
+                            new_record["VisitDate"] = plan_for_date
                             st.session_state.planned_df = pd.concat(
                                 [st.session_state.planned_df, pd.DataFrame([new_record])],
                                 ignore_index=True
                             )
-                            st.success(f"✅ {row.get('StoreName','')} added to today's plan!")
+                            st.success(f"✅ {row.get('StoreName','')} added to {plan_for_date.strftime('%d %b %Y')}!")
                             st.rerun()
 
             st.markdown("---")
