@@ -467,7 +467,7 @@ def download_pending_stores_button(pend_df, key, filename_prefix="Pending_Stores
     """
     if pend_df is None or pend_df.empty:
         return
-    cols = [c for c in ["StoreID", "StoreName", "City", "GSTNumber", "EmployeeCode"] if c in pend_df.columns]
+    cols = [c for c in ["EmployeeCode", "EmployeeName", "StoreID", "StoreName", "City", "GSTNumber"] if c in pend_df.columns]
     dl_df = pend_df[cols].copy() if cols else pend_df.copy()
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
@@ -769,25 +769,62 @@ if st.session_state.role == "admin":
         if emp_list.empty:
             st.info("No employees found.")
         else:
-            total_pending_stores = 0
-            any_pending = False
+            summary_rows = []
+            all_pending_frames = []
+            for _, erow in emp_list.iterrows():
+                ec = str(erow.get("EmployeeCode", ""))
+                en = erow.get("EmployeeName", ec)
+                pend_stores = get_pending_stores_for_employee(ec)
+                summary_rows.append({"EmployeeCode": ec, "EmployeeName": en, "PendingStores": len(pend_stores)})
+                if not pend_stores.empty:
+                    tagged = pend_stores.copy()
+                    tagged.insert(0, "EmployeeName", en)
+                    tagged.insert(0, "EmployeeCode", ec)
+                    all_pending_frames.append(tagged)
+
+            summary_df = pd.DataFrame(summary_rows).sort_values("PendingStores", ascending=False)
+            total_pending_stores = int(summary_df["PendingStores"].sum())
+
+            c1, c2 = st.columns(2)
+            with c1:
+                st.markdown(f"""
+                    <div class='metric-card amber'>
+                        <div class='metric-icon'>📦</div>
+                        <div class='metric-label'>Total Never-Planned Stores</div>
+                        <div class='metric-value'>{total_pending_stores}</div>
+                        <div class='metric-sub'>Across all employees</div>
+                    </div>""", unsafe_allow_html=True)
+            with c2:
+                emps_with_pending = int((summary_df["PendingStores"] > 0).sum())
+                st.markdown(f"""
+                    <div class='metric-card red'>
+                        <div class='metric-icon'>👥</div>
+                        <div class='metric-label'>Employees With Pending Stores</div>
+                        <div class='metric-value'>{emps_with_pending}</div>
+                        <div class='metric-sub'>Out of {len(emp_list)} total</div>
+                    </div>""", unsafe_allow_html=True)
+
+            st.markdown("#### 📊 Employee-wise Pending Store Count")
+            st.dataframe(summary_df, use_container_width=True, hide_index=True)
+
+            if all_pending_frames:
+                combined_pending = pd.concat(all_pending_frames, ignore_index=True)
+                download_pending_stores_button(combined_pending, "all_emp_pend_store_dl", "All_Employees_Pending_Stores")
+            else:
+                st.success("🎉 Every assigned store has been planned at least once by its employee!")
+
+            st.markdown("#### 📋 Store-level Detail (Per Employee)")
             for _, erow in emp_list.iterrows():
                 ec = str(erow.get("EmployeeCode", ""))
                 en = erow.get("EmployeeName", ec)
                 pend_stores = get_pending_stores_for_employee(ec)
                 if pend_stores.empty:
                     continue
-                any_pending = True
-                total_pending_stores += len(pend_stores)
                 with st.expander(f"⏳ {en} ({ec}) — {len(pend_stores)} store(s) never planned"):
                     show_cols = [c for c in ["StoreID", "StoreName", "City", "GSTNumber"] if c in pend_stores.columns]
                     st.dataframe(pend_stores[show_cols] if show_cols else pend_stores,
                                  use_container_width=True, hide_index=True)
                     download_pending_stores_button(pend_stores, f"pend_store_dl_{ec}", f"Pending_Stores_{ec}")
-            if not any_pending:
-                st.success("🎉 Every assigned store has been planned at least once by its employee!")
-            else:
-                st.caption(f"**{total_pending_stores}** store(s) across all employees have never been planned.")
 
         st.markdown("---")
         section_header("📋", "Recent Plans")
