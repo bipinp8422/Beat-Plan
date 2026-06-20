@@ -167,7 +167,7 @@ st.markdown("""
     .marquee-track { flex: 1; overflow: hidden; position: relative; }
     .marquee-content {
         display: inline-block; white-space: nowrap;
-        animation: marquee-scroll 60s linear infinite;
+        animation: marquee-scroll 140s linear infinite;
         font-size: 14px; font-weight: 600; color: #9a3412;
     }
     .marquee-content span { margin-right: 50px; }
