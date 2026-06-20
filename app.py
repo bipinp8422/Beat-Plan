@@ -208,7 +208,7 @@ def load_from_supabase(table_name, columns, keep_id=False):
     """
     Load all rows from a Supabase table.
     If keep_id=True, the 'id' column is preserved in the returned DataFrame
-    (needed for row-level deletes on planned_visits).
+    (needed for row-level deletes / updates).
     """
     try:
         all_rows = []
@@ -225,7 +225,6 @@ def load_from_supabase(table_name, columns, keep_id=False):
         if all_rows:
             df = pd.DataFrame(all_rows)
             df = clean_dataframe(df, columns)
-            # Keep 'id' column if requested and present
             if keep_id and "id" in df.columns:
                 pass  # retain it
             elif not keep_id and "id" in df.columns:
@@ -236,12 +235,11 @@ def load_from_supabase(table_name, columns, keep_id=False):
         st.warning(f"⚠️ Error loading `{table_name}`: {e}")
         return pd.DataFrame(columns=columns)
 
-# ── SAFE: only replaces master tables (employee, gst, admin) ──
+# ── DEPRECATED / DANGEROUS: kept only for admin_master (tiny, rarely-changed table) ──
+# DO NOT use this for gst_master, employee_master, or planned_visits.
+# It deletes the ENTIRE table then reinserts — if the insert step fails partway,
+# or session state is stale, real rows get permanently wiped.
 def save_master_to_supabase(table_name, df):
-    """
-    Full replace for small master tables (employee_master, gst_master, admin_master).
-    NEVER call this for planned_visits.
-    """
     try:
         df_copy = df.copy()
         if "id" in df_copy.columns:
@@ -264,10 +262,6 @@ def save_master_to_supabase(table_name, df):
 
 # ── SAFE: insert a single new planned visit row ──
 def insert_planned_visit(record: dict):
-    """
-    Insert ONE new row into planned_visits.
-    Never deletes existing rows — safe regardless of table size.
-    """
     try:
         rec = {k: v for k, v in record.items() if k != "id"}
         if "VisitDate" in rec:
@@ -277,7 +271,6 @@ def insert_planned_visit(record: dict):
             else:
                 rec["VisitDate"] = str(v)
         response = supabase.table("planned_visits").insert(rec).execute()
-        # Return the inserted row's id so we can store it in session state
         if response.data:
             return response.data[0].get("id")
         return None
@@ -287,15 +280,65 @@ def insert_planned_visit(record: dict):
 
 # ── SAFE: delete a single planned visit row by its Supabase id ──
 def delete_planned_visit(row_id):
-    """
-    Delete ONE row from planned_visits by primary key.
-    Never touches other rows.
-    """
     try:
         supabase.table("planned_visits").delete().eq("id", int(row_id)).execute()
         return True
     except Exception as e:
         st.error(f"❌ Delete failed: {e}")
+        return False
+
+# ── SAFE: insert a single new store row into gst_master ──
+def insert_gst_row(record: dict):
+    """
+    Insert ONE new row into gst_master. Never touches existing rows.
+    """
+    try:
+        rec = {k: v for k, v in record.items() if k != "id"}
+        response = supabase.table("gst_master").insert(rec).execute()
+        if response.data:
+            return response.data[0].get("id")
+        return None
+    except Exception as e:
+        st.error(f"❌ Store insert failed: {e}")
+        return None
+
+# ── SAFE: delete a single store row from gst_master by StoreID ──
+def delete_gst_row(store_id):
+    """
+    Delete ONE row from gst_master by StoreID. Never touches other rows.
+    """
+    try:
+        supabase.table("gst_master").delete().eq("StoreID", str(store_id)).execute()
+        return True
+    except Exception as e:
+        st.error(f"❌ Store delete failed: {e}")
+        return False
+
+# ── SAFE: insert a single new employee row into employee_master ──
+def insert_employee_row(record: dict):
+    """
+    Insert ONE new row into employee_master. Never touches existing rows.
+    """
+    try:
+        rec = {k: v for k, v in record.items() if k != "id"}
+        response = supabase.table("employee_master").insert(rec).execute()
+        if response.data:
+            return response.data[0].get("id")
+        return None
+    except Exception as e:
+        st.error(f"❌ Employee insert failed: {e}")
+        return None
+
+# ── SAFE: delete a single employee row from employee_master by EmployeeCode ──
+def delete_employee_row(emp_code):
+    """
+    Delete ONE row from employee_master by EmployeeCode. Never touches other rows.
+    """
+    try:
+        supabase.table("employee_master").delete().eq("EmployeeCode", str(emp_code)).execute()
+        return True
+    except Exception as e:
+        st.error(f"❌ Employee delete failed: {e}")
         return False
 
 # ====================== COLUMN CONSTANTS ======================
@@ -313,7 +356,6 @@ if "employee_df" not in st.session_state:
 if "gst_df" not in st.session_state:
     st.session_state.gst_df = load_from_supabase("gst_master", GST_COLS)
 if "planned_df" not in st.session_state:
-    # keep_id=True so we can do row-level deletes
     st.session_state.planned_df = load_from_supabase("planned_visits", PLAN_COLS, keep_id=True)
 if "admin_df" not in st.session_state:
     st.session_state.admin_df = load_from_supabase("admin_master", ADMIN_COLS)
@@ -335,7 +377,6 @@ def safe_col(df, col):
 
 def download_beat_plan_button(df, key, filename_prefix="Beat_Plan"):
     if not df.empty:
-        # Exclude internal 'id' column from download
         dl_df = df.drop(columns=["id"], errors="ignore")
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine="openpyxl") as writer:
@@ -350,6 +391,28 @@ def download_beat_plan_button(df, key, filename_prefix="Beat_Plan"):
             key=key,
         )
 
+def download_pending_button(pend_df, key, sel_date):
+    """
+    Excel export of pending (not-yet-submitted) employees for a given date.
+    """
+    if pend_df is None or pend_df.empty:
+        return
+    cols = [c for c in ["EmployeeCode", "EmployeeName"] if c in pend_df.columns]
+    dl_df = pend_df[cols].copy() if cols else pend_df.copy()
+    dl_df.insert(0, "Date", sel_date.strftime("%Y-%m-%d"))
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        dl_df.to_excel(writer, index=False, sheet_name="Pending")
+    output.seek(0)
+    st.download_button(
+        label="📥 Download Pending List (Excel)",
+        data=output.getvalue(),
+        file_name=f"Pending_Beat_Plan_{sel_date.strftime('%Y-%m-%d')}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        use_container_width=True,
+        key=key,
+    )
+
 def section_header(icon, title):
     st.markdown(f"""
         <div class='section-head'>
@@ -361,7 +424,6 @@ def fetch_beat_status_live(sel_date):
     """
     Query Supabase DIRECTLY for planned_visits on sel_date.
     Returns dict: { employee_code -> store_count }
-    Fetches ALL rows then filters in Python to handle column name variants.
     """
     try:
         date_str = sel_date.strftime("%Y-%m-%d")
@@ -591,6 +653,8 @@ if st.session_state.role == "admin":
                 if pend_emps.empty:
                     st.success("🎉 All employees have submitted today!")
                 else:
+                    # ── Excel export of today's pending employees ──
+                    download_pending_button(pend_emps, "pend_dl_dash", date.today())
                     for _, row in pend_emps.iterrows():
                         ec = str(row.get("EmployeeCode", ""))
                         en = row.get("EmployeeName", ec)
@@ -690,6 +754,8 @@ if st.session_state.role == "admin":
                 if pend_emps.empty:
                     st.success(f"🎉 All employees have submitted for {sel_date.strftime('%d %b %Y')}!")
                 else:
+                    # ── Excel export of pending employees for the selected date ──
+                    download_pending_button(pend_emps, "pend_dl_status", sel_date)
                     for _, row in pend_emps.iterrows():
                         ec = str(row.get("EmployeeCode", ""))
                         en = row.get("EmployeeName", ec)
@@ -729,20 +795,34 @@ if st.session_state.role == "admin":
                     elif safe_col(st.session_state.employee_df, "EmployeeCode").astype(str).str.upper().eq(ecode.strip().upper()).any():
                         st.error("❌ Code already exists!")
                     else:
-                        new_row = pd.DataFrame([{"EmployeeCode": ecode.strip().upper(), "EmployeeName": ename.strip().title(), "Password": epwd.strip()}])
-                        st.session_state.employee_df = pd.concat([st.session_state.employee_df, new_row], ignore_index=True)
-                        if save_master_to_supabase("employee_master", st.session_state.employee_df):
-                            st.success("✅ Added!"); st.rerun()
+                        new_record = {
+                            "EmployeeCode": ecode.strip().upper(),
+                            "EmployeeName": ename.strip().title(),
+                            "Password": epwd.strip(),
+                        }
+                        # ── SAFE INSERT: only adds this one row, never touches existing rows ──
+                        new_id = insert_employee_row(new_record)
+                        if new_id is not None:
+                            new_record["id"] = new_id
+                            st.session_state.employee_df = pd.concat(
+                                [st.session_state.employee_df, pd.DataFrame([new_record])],
+                                ignore_index=True
+                            )
+                            st.success("✅ Added!")
+                            st.rerun()
         with tab3:
             if st.session_state.employee_df.empty:
                 st.info("No employees.")
             else:
                 emp_del = st.selectbox("Select", safe_col(st.session_state.employee_df, "EmployeeCode").unique())
                 if st.button("🗑️ Delete", type="primary"):
-                    st.session_state.employee_df = st.session_state.employee_df[
-                        safe_col(st.session_state.employee_df, "EmployeeCode") != emp_del]
-                    if save_master_to_supabase("employee_master", st.session_state.employee_df):
-                        st.success(f"✅ {emp_del} deleted!"); st.rerun()
+                    # ── SAFE DELETE: removes only this one row by EmployeeCode ──
+                    if delete_employee_row(emp_del):
+                        st.session_state.employee_df = st.session_state.employee_df[
+                            safe_col(st.session_state.employee_df, "EmployeeCode") != emp_del
+                        ].reset_index(drop=True)
+                        st.success(f"✅ {emp_del} deleted!")
+                        st.rerun()
 
     # ── MANAGE STORES ──
     elif admin_menu == "🏪 Manage Stores":
@@ -773,21 +853,36 @@ if st.session_state.role == "admin":
                         st.error("❌ GST exists!")
                     else:
                         nid = f"S{len(st.session_state.gst_df)+1:05d}"
-                        st.session_state.gst_df = pd.concat([st.session_state.gst_df,
-                            pd.DataFrame([{"StoreID": nid, "StoreName": sname.strip().title(),
-                                           "GSTNumber": gc, "City": city.strip().title(), "EmployeeCode": emp_sel}])
-                        ], ignore_index=True)
-                        if save_master_to_supabase("gst_master", st.session_state.gst_df):
-                            st.success("✅ Store added!"); st.rerun()
+                        new_record = {
+                            "StoreID": nid,
+                            "StoreName": sname.strip().title(),
+                            "GSTNumber": gc,
+                            "City": city.strip().title(),
+                            "EmployeeCode": emp_sel,
+                        }
+                        # ── SAFE INSERT: only adds this one row, never touches existing rows ──
+                        new_id = insert_gst_row(new_record)
+                        if new_id is not None:
+                            new_record["id"] = new_id
+                            st.session_state.gst_df = pd.concat(
+                                [st.session_state.gst_df, pd.DataFrame([new_record])],
+                                ignore_index=True
+                            )
+                            st.success("✅ Store added!")
+                            st.rerun()
         with tab3:
             if st.session_state.gst_df.empty:
                 st.info("No stores.")
             else:
                 sdel = st.selectbox("Select Store", safe_col(st.session_state.gst_df, "StoreID").unique())
                 if st.button("🗑️ Delete Store", type="primary"):
-                    st.session_state.gst_df = st.session_state.gst_df[safe_col(st.session_state.gst_df, "StoreID") != sdel]
-                    if save_master_to_supabase("gst_master", st.session_state.gst_df):
-                        st.success(f"✅ {sdel} deleted!"); st.rerun()
+                    # ── SAFE DELETE: removes only this one row by StoreID ──
+                    if delete_gst_row(sdel):
+                        st.session_state.gst_df = st.session_state.gst_df[
+                            safe_col(st.session_state.gst_df, "StoreID") != sdel
+                        ].reset_index(drop=True)
+                        st.success(f"✅ {sdel} deleted!")
+                        st.rerun()
 
     # ── VIEW PLANS ──
     elif admin_menu == "📋 View Plans":
@@ -852,7 +947,6 @@ else:
             if st.button("🔍 Load Stores", use_container_width=True):
                 st.session_state.selected_cities = sel_cities
 
-        # Use session state planned_df (which includes 'id' column)
         daily_plans = st.session_state.planned_df[
             (safe_col(st.session_state.planned_df, "EmployeeCode").astype(str) == str(emp_code)) &
             (st.session_state.planned_df["VisitDate"] == visit_date)
@@ -925,11 +1019,10 @@ else:
                                 "GSTNumber":    row.get("GSTNumber", ""),
                                 "VisitDate":    visit_date,
                             }
-                            # ── SAFE INSERT: only adds this one row ──
                             new_id = insert_planned_visit(new_record)
                             if new_id is not None:
                                 new_record["id"] = new_id
-                                new_record["VisitDate"] = visit_date  # keep as date object
+                                new_record["VisitDate"] = visit_date
                                 st.session_state.planned_df = pd.concat(
                                     [st.session_state.planned_df, pd.DataFrame([new_record])],
                                     ignore_index=True
@@ -998,13 +1091,11 @@ else:
                         if st.button("🗑️", key=f"del_plan_{idx}_{i}", help="Remove this entry"):
                             row_id = row.get("id")
                             if row_id and str(row_id).lower() not in ("", "nan", "none"):
-                                # ── SAFE DELETE: removes only this one row by id ──
                                 if delete_planned_visit(row_id):
                                     st.session_state.planned_df = st.session_state.planned_df.drop(index=idx).reset_index(drop=True)
                                     st.success("✅ Entry removed.")
                                     st.rerun()
                             else:
-                                # Fallback: no id stored — remove from session only
                                 st.session_state.planned_df = st.session_state.planned_df.drop(index=idx).reset_index(drop=True)
                                 st.warning("⚠️ Removed from session. DB row may persist — refresh data to sync.")
                                 st.rerun()
@@ -1085,12 +1176,23 @@ else:
                     st.error("❌ GST exists!")
                 else:
                     nid = f"S{len(st.session_state.gst_df)+1:05d}"
-                    st.session_state.gst_df = pd.concat([st.session_state.gst_df,
-                        pd.DataFrame([{"StoreID": nid, "StoreName": sname.strip().title(),
-                                       "GSTNumber": gc, "City": city.strip().title(), "EmployeeCode": emp_code}])
-                    ], ignore_index=True)
-                    if save_master_to_supabase("gst_master", st.session_state.gst_df):
-                        st.success(f"✅ '{sname.title()}' added!"); st.rerun()
+                    new_record = {
+                        "StoreID": nid,
+                        "StoreName": sname.strip().title(),
+                        "GSTNumber": gc,
+                        "City": city.strip().title(),
+                        "EmployeeCode": emp_code,
+                    }
+                    # ── SAFE INSERT: only adds this one row, never touches existing rows ──
+                    new_id = insert_gst_row(new_record)
+                    if new_id is not None:
+                        new_record["id"] = new_id
+                        st.session_state.gst_df = pd.concat(
+                            [st.session_state.gst_df, pd.DataFrame([new_record])],
+                            ignore_index=True
+                        )
+                        st.success(f"✅ '{sname.title()}' added!")
+                        st.rerun()
 
 # ====================== FOOTER ======================
 st.markdown("---")
