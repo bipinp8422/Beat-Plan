@@ -167,7 +167,7 @@ st.markdown("""
     .marquee-track { flex: 1; overflow: hidden; position: relative; }
     .marquee-content {
         display: inline-block; white-space: nowrap;
-        animation: marquee-scroll 160s linear infinite;
+        animation: marquee-scroll 140s linear infinite;
         font-size: 14px; font-weight: 600; color: #9a3412;
     }
     .marquee-content span { margin-right: 50px; }
@@ -484,17 +484,24 @@ def download_pending_stores_button(pend_df, key, filename_prefix="Pending_Stores
 
 def render_pending_marquee(pend_stores):
     """
-    Scrolling ticker of never-planned store names. Renders nothing if empty.
+    Scrolling ticker of never-planned store names. Each name is a clickable
+    link (passes StoreID via query param) so the employee can plan it for
+    any date right from the dashboard. Renders nothing if empty.
     """
     if pend_stores is None or pend_stores.empty:
         return
-    names = []
+    items = []
     for _, r in pend_stores.iterrows():
-        nm = r.get("StoreName", "—")
-        ct = r.get("City", "")
-        names.append(f"🏪 {nm} ({ct})" if ct else f"🏪 {nm}")
+        nm  = r.get("StoreName", "—")
+        ct  = r.get("City", "")
+        sid = r.get("StoreID", "")
+        label = f"🏪 {nm} ({ct})" if ct else f"🏪 {nm}"
+        items.append(
+            f"<a href='?plan_store={sid}' target='_self' "
+            f"style='color:#9a3412;text-decoration:none;border-bottom:1.5px dashed #f59e0b;'>{label}</a>"
+        )
     # repeat list so the scroll loop feels continuous
-    content = "".join([f"<span>{n}</span>" for n in names * 2])
+    content = "".join([f"<span>{i}</span>" for i in items * 2])
     st.markdown(f"""
         <div class='marquee-wrap'>
             <div class='marquee-tag'>📦 {len(pend_stores)} NEVER PLANNED</div>
@@ -502,6 +509,7 @@ def render_pending_marquee(pend_stores):
                 <div class='marquee-content'>{content}</div>
             </div>
         </div>""", unsafe_allow_html=True)
+    st.caption("👆 Click any store name above to plan it for any date.")
 
 def section_header(icon, title):
     st.markdown(f"""
@@ -1038,7 +1046,69 @@ else:
     st.markdown(f"<h1 class='main-header'>👤 {emp_name}</h1>", unsafe_allow_html=True)
     st.markdown("<p class='sub-header'>Your Beat Planning Dashboard</p>", unsafe_allow_html=True)
 
-    render_pending_marquee(get_pending_stores_for_employee(emp_code))
+    pending_all = get_pending_stores_for_employee(emp_code)
+    render_pending_marquee(pending_all)
+
+    # ── Handle marquee click: ?plan_store=<StoreID> ──
+    clicked_sid = st.query_params.get("plan_store")
+    if clicked_sid:
+        match_row = pending_all[safe_col(pending_all, "StoreID").astype(str) == str(clicked_sid)]
+        if match_row.empty:
+            st.query_params.clear()
+        else:
+            row = match_row.iloc[0]
+            with st.container():
+                st.markdown(f"""
+                    <div class='store-card' style='border:1.5px solid #f59e0b;background:#fff7ed;'>
+                        <div class='store-name'>📦 Plan: {row.get('StoreName','—')}</div>
+                        <div class='store-meta'>
+                            <span class='store-chip'>📍 {row.get('City','—')}</span>
+                            <span class='store-chip'>🪪 {row.get('StoreID','—')}</span>
+                            <span class='store-chip'>🧾 {row.get('GSTNumber','—')}</span>
+                        </div>
+                    </div>""", unsafe_allow_html=True)
+                colA, colB, colC = st.columns([2, 1, 1])
+                with colA:
+                    marquee_plan_date = st.date_input("📅 Plan for date", value=date.today(), key="marquee_plan_date")
+                with colB:
+                    st.markdown("<br>", unsafe_allow_html=True)
+                    confirm_clicked = st.button("✅ Confirm Plan", key="marquee_confirm", use_container_width=True)
+                with colC:
+                    st.markdown("<br>", unsafe_allow_html=True)
+                    cancel_clicked = st.button("✖️ Cancel", key="marquee_cancel", use_container_width=True)
+
+                day_count = len(st.session_state.planned_df[
+                    (safe_col(st.session_state.planned_df, "EmployeeCode").astype(str) == str(emp_code)) &
+                    (st.session_state.planned_df["VisitDate"] == marquee_plan_date)
+                ]) if "VisitDate" in st.session_state.planned_df.columns else 0
+
+                if cancel_clicked:
+                    st.query_params.clear()
+                    st.rerun()
+                elif confirm_clicked:
+                    if day_count >= 10:
+                        st.error(f"🚫 {marquee_plan_date.strftime('%d %b %Y')} already has 10 stores planned. Pick another date.")
+                    else:
+                        new_record = {
+                            "EmployeeCode": emp_code,
+                            "EmployeeName": emp_name,
+                            "City":         row.get("City", ""),
+                            "Store":        row.get("StoreName", ""),
+                            "StoreID":      row.get("StoreID", ""),
+                            "GSTNumber":    row.get("GSTNumber", ""),
+                            "VisitDate":    marquee_plan_date,
+                        }
+                        new_id = insert_planned_visit(new_record)
+                        if new_id is not None:
+                            new_record["id"] = new_id
+                            new_record["VisitDate"] = marquee_plan_date
+                            st.session_state.planned_df = pd.concat(
+                                [st.session_state.planned_df, pd.DataFrame([new_record])],
+                                ignore_index=True
+                            )
+                            st.query_params.clear()
+                            st.success(f"✅ {row.get('StoreName','')} planned for {marquee_plan_date.strftime('%d %b %Y')}!")
+                            st.rerun()
 
     employee_stores = st.session_state.gst_df[
         safe_col(st.session_state.gst_df, "EmployeeCode").astype(str) == str(emp_code)
