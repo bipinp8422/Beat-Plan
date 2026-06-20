@@ -152,6 +152,29 @@ st.markdown("""
     }
     .del-info { flex: 1; font-size: 14px; color: #1e293b; }
     .del-date { font-size: 12px; color: #94a3b8; margin-top: 3px; }
+
+    .marquee-wrap {
+        background: linear-gradient(135deg, #fff7ed, #fef2f2);
+        border: 1.5px solid #fed7aa; border-radius: 12px;
+        padding: 10px 0; margin-bottom: 18px; overflow: hidden;
+        display: flex; align-items: center; white-space: nowrap;
+    }
+    .marquee-tag {
+        flex-shrink: 0; background: #f59e0b; color: #fff; font-weight: 800;
+        font-size: 12px; padding: 6px 14px; border-radius: 8px;
+        margin: 0 12px; letter-spacing: 0.5px;
+    }
+    .marquee-track { flex: 1; overflow: hidden; position: relative; }
+    .marquee-content {
+        display: inline-block; white-space: nowrap;
+        animation: marquee-scroll 22s linear infinite;
+        font-size: 14px; font-weight: 600; color: #9a3412;
+    }
+    .marquee-content span { margin-right: 50px; }
+    @keyframes marquee-scroll {
+        0%   { transform: translateX(0%); }
+        100% { transform: translateX(-100%); }
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -457,6 +480,27 @@ def download_pending_stores_button(pend_df, key, filename_prefix="Pending_Stores
         use_container_width=True,
         key=key,
     )
+
+def render_pending_marquee(pend_stores):
+    """
+    Scrolling ticker of never-planned store names. Renders nothing if empty.
+    """
+    if pend_stores is None or pend_stores.empty:
+        return
+    names = []
+    for _, r in pend_stores.iterrows():
+        nm = r.get("StoreName", "—")
+        ct = r.get("City", "")
+        names.append(f"🏪 {nm} ({ct})" if ct else f"🏪 {nm}")
+    # repeat list so the scroll loop feels continuous
+    content = "".join([f"<span>{n}</span>" for n in names * 2])
+    st.markdown(f"""
+        <div class='marquee-wrap'>
+            <div class='marquee-tag'>📦 {len(pend_stores)} NEVER PLANNED</div>
+            <div class='marquee-track'>
+                <div class='marquee-content'>{content}</div>
+            </div>
+        </div>""", unsafe_allow_html=True)
 
 def section_header(icon, title):
     st.markdown(f"""
@@ -993,6 +1037,8 @@ else:
     st.markdown(f"<h1 class='main-header'>👤 {emp_name}</h1>", unsafe_allow_html=True)
     st.markdown("<p class='sub-header'>Your Beat Planning Dashboard</p>", unsafe_allow_html=True)
 
+    render_pending_marquee(get_pending_stores_for_employee(emp_code))
+
     employee_stores = st.session_state.gst_df[
         safe_col(st.session_state.gst_df, "EmployeeCode").astype(str) == str(emp_code)
     ] if not st.session_state.gst_df.empty else pd.DataFrame(columns=GST_COLS)
@@ -1009,9 +1055,6 @@ else:
             st.stop()
 
         pending_stores_all = get_pending_stores_for_employee(emp_code)
-        if not pending_stores_all.empty:
-            st.warning(f"📦 You have **{len(pending_stores_all)}** store(s) that have never been planned. "
-                       f"Check the **📦 Pending Stores** tab in the sidebar.")
 
         c1, c2, c3 = st.columns(3)
         with c1:
