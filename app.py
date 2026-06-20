@@ -167,13 +167,14 @@ st.markdown("""
     .marquee-track { flex: 1; overflow: hidden; position: relative; }
     .marquee-content {
         display: inline-block; white-space: nowrap;
-        animation: marquee-scroll 22s linear infinite;
+        animation: marquee-scroll 60s linear infinite;
         font-size: 14px; font-weight: 600; color: #9a3412;
     }
     .marquee-content span { margin-right: 50px; }
+    .marquee-wrap:hover .marquee-content { animation-play-state: paused; }
     @keyframes marquee-scroll {
         0%   { transform: translateX(0%); }
-        100% { transform: translateX(-100%); }
+        100% { transform: translateX(-50%); }
     }
 </style>
 """, unsafe_allow_html=True)
