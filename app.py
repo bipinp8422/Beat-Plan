@@ -205,6 +205,11 @@ def clean_dataframe(df, expected_columns):
     return df
 
 def load_from_supabase(table_name, columns, keep_id=False):
+    """
+    Load all rows from a Supabase table.
+    If keep_id=True, the 'id' column is preserved in the returned DataFrame
+    (needed for row-level deletes / updates).
+    """
     try:
         all_rows = []
         batch_size = 1000
@@ -221,7 +226,7 @@ def load_from_supabase(table_name, columns, keep_id=False):
             df = pd.DataFrame(all_rows)
             df = clean_dataframe(df, columns)
             if keep_id and "id" in df.columns:
-                pass
+                pass  # retain it
             elif not keep_id and "id" in df.columns:
                 df = df.drop(columns=["id"])
             return df
@@ -230,6 +235,10 @@ def load_from_supabase(table_name, columns, keep_id=False):
         st.warning(f"⚠️ Error loading `{table_name}`: {e}")
         return pd.DataFrame(columns=columns)
 
+# ── DEPRECATED / DANGEROUS: kept only for admin_master (tiny, rarely-changed table) ──
+# DO NOT use this for gst_master, employee_master, or planned_visits.
+# It deletes the ENTIRE table then reinserts — if the insert step fails partway,
+# or session state is stale, real rows get permanently wiped.
 def save_master_to_supabase(table_name, df):
     try:
         df_copy = df.copy()
@@ -251,6 +260,7 @@ def save_master_to_supabase(table_name, df):
         st.error(f"❌ Save failed for `{table_name}`: {e}")
         return False
 
+# ── SAFE: insert a single new planned visit row ──
 def insert_planned_visit(record: dict):
     try:
         rec = {k: v for k, v in record.items() if k != "id"}
@@ -268,6 +278,7 @@ def insert_planned_visit(record: dict):
         st.error(f"❌ Insert failed: {e}")
         return None
 
+# ── SAFE: delete a single planned visit row by its Supabase id ──
 def delete_planned_visit(row_id):
     try:
         supabase.table("planned_visits").delete().eq("id", int(row_id)).execute()
@@ -276,7 +287,11 @@ def delete_planned_visit(row_id):
         st.error(f"❌ Delete failed: {e}")
         return False
 
+# ── SAFE: insert a single new store row into gst_master ──
 def insert_gst_row(record: dict):
+    """
+    Insert ONE new row into gst_master. Never touches existing rows.
+    """
     try:
         rec = {k: v for k, v in record.items() if k != "id"}
         response = supabase.table("gst_master").insert(rec).execute()
@@ -287,7 +302,11 @@ def insert_gst_row(record: dict):
         st.error(f"❌ Store insert failed: {e}")
         return None
 
+# ── SAFE: delete a single store row from gst_master by StoreID ──
 def delete_gst_row(store_id):
+    """
+    Delete ONE row from gst_master by StoreID. Never touches other rows.
+    """
     try:
         supabase.table("gst_master").delete().eq("StoreID", str(store_id)).execute()
         return True
@@ -295,7 +314,11 @@ def delete_gst_row(store_id):
         st.error(f"❌ Store delete failed: {e}")
         return False
 
+# ── SAFE: insert a single new employee row into employee_master ──
 def insert_employee_row(record: dict):
+    """
+    Insert ONE new row into employee_master. Never touches existing rows.
+    """
     try:
         rec = {k: v for k, v in record.items() if k != "id"}
         response = supabase.table("employee_master").insert(rec).execute()
@@ -306,7 +329,11 @@ def insert_employee_row(record: dict):
         st.error(f"❌ Employee insert failed: {e}")
         return None
 
+# ── SAFE: delete a single employee row from employee_master by EmployeeCode ──
 def delete_employee_row(emp_code):
+    """
+    Delete ONE row from employee_master by EmployeeCode. Never touches other rows.
+    """
     try:
         supabase.table("employee_master").delete().eq("EmployeeCode", str(emp_code)).execute()
         return True
@@ -348,6 +375,30 @@ def get_progress_color(current, max_val):
 def safe_col(df, col):
     return df[col] if col in df.columns else pd.Series([""] * len(df))
 
+def get_pending_stores_for_employee(emp_code):
+    """
+    Stores assigned to this employee in gst_master that have NEVER appeared
+    in planned_visits for this employee (all-time, any date).
+    """
+    gst_df = st.session_state.gst_df
+    plan_df = st.session_state.planned_df
+
+    emp_stores = gst_df[safe_col(gst_df, "EmployeeCode").astype(str) == str(emp_code)] \
+        if not gst_df.empty else pd.DataFrame(columns=GST_COLS)
+
+    if emp_stores.empty:
+        return emp_stores
+
+    ever_planned_ids = set(
+        safe_col(
+            plan_df[safe_col(plan_df, "EmployeeCode").astype(str) == str(emp_code)],
+            "StoreID"
+        ).astype(str).str.strip()
+    ) if not plan_df.empty else set()
+
+    pending = emp_stores[~safe_col(emp_stores, "StoreID").astype(str).str.strip().isin(ever_planned_ids)]
+    return pending
+
 def download_beat_plan_button(df, key, filename_prefix="Beat_Plan"):
     if not df.empty:
         dl_df = df.drop(columns=["id"], errors="ignore")
@@ -365,6 +416,9 @@ def download_beat_plan_button(df, key, filename_prefix="Beat_Plan"):
         )
 
 def download_pending_button(pend_df, key, sel_date):
+    """
+    Excel export of pending (not-yet-submitted) employees for a given date.
+    """
     if pend_df is None or pend_df.empty:
         return
     cols = [c for c in ["EmployeeCode", "EmployeeName"] if c in pend_df.columns]
@@ -383,6 +437,27 @@ def download_pending_button(pend_df, key, sel_date):
         key=key,
     )
 
+def download_pending_stores_button(pend_df, key, filename_prefix="Pending_Stores"):
+    """
+    Excel export of stores that have never been planned.
+    """
+    if pend_df is None or pend_df.empty:
+        return
+    cols = [c for c in ["StoreID", "StoreName", "City", "GSTNumber", "EmployeeCode"] if c in pend_df.columns]
+    dl_df = pend_df[cols].copy() if cols else pend_df.copy()
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        dl_df.to_excel(writer, index=False, sheet_name="Pending Stores")
+    output.seek(0)
+    st.download_button(
+        label="📥 Download Pending Stores (Excel)",
+        data=output.getvalue(),
+        file_name=f"{filename_prefix}_{date.today().strftime('%Y-%m-%d')}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        use_container_width=True,
+        key=key,
+    )
+
 def section_header(icon, title):
     st.markdown(f"""
         <div class='section-head'>
@@ -391,6 +466,10 @@ def section_header(icon, title):
         </div>""", unsafe_allow_html=True)
 
 def fetch_beat_status_live(sel_date):
+    """
+    Query Supabase DIRECTLY for planned_visits on sel_date.
+    Returns dict: { employee_code -> store_count }
+    """
     try:
         date_str = sel_date.strftime("%Y-%m-%d")
         all_rows = []
@@ -438,6 +517,9 @@ def fetch_beat_status_live(sel_date):
 
 
 def fetch_emp_plans_live(emp_code, sel_date):
+    """
+    Fetch full store details for one employee on one date, live from DB.
+    """
     try:
         date_str = sel_date.strftime("%Y-%m-%d")
         all_rows = []
@@ -475,201 +557,6 @@ def fetch_emp_plans_live(emp_code, sel_date):
     except Exception as e:
         st.warning(f"⚠️ Could not load details: {e}")
         return pd.DataFrame()
-
-
-# ====================== PIVOT BEAT PLAN BUILDER ======================
-def build_pivot_beat_plan(df, emp_filter=None, city_filter=None, date_range=None):
-    """
-    Build a pivot-table style beat plan matching the portal format:
-    Rows = Store (with EmployeeCode, EmployeeName, GSTNumber, Store, City, StoreID)
-    Columns = unique VisitDates
-    Values = 1 if visited on that date, 0 otherwise
-    Grand Total column at the end
-    """
-    work = df.drop(columns=["id"], errors="ignore").copy()
-
-    # Apply filters
-    if emp_filter and emp_filter != "All" and "EmployeeName" in work.columns:
-        work = work[work["EmployeeName"] == emp_filter]
-    if city_filter and city_filter != "All" and "City" in work.columns:
-        work = work[work["City"] == city_filter]
-    if date_range and len(date_range) == 2 and "VisitDate" in work.columns:
-        work = work[(work["VisitDate"] >= date_range[0]) & (work["VisitDate"] <= date_range[1])]
-
-    if work.empty:
-        return pd.DataFrame()
-
-    # Ensure VisitDate is date type
-    if "VisitDate" in work.columns:
-        work["VisitDate"] = pd.to_datetime(work["VisitDate"], errors="coerce").dt.date
-
-    # Drop rows with no VisitDate
-    work = work.dropna(subset=["VisitDate"])
-    if work.empty:
-        return pd.DataFrame()
-
-    # Add a value column for pivot
-    work["_visited"] = 1
-
-    # Identity columns for each store row
-    id_cols = ["EmployeeCode", "EmployeeName", "GSTNumber", "Store", "City", "StoreID"]
-    id_cols = [c for c in id_cols if c in work.columns]
-
-    # Build pivot
-    pivot = work.pivot_table(
-        index=id_cols,
-        columns="VisitDate",
-        values="_visited",
-        aggfunc="sum",
-        fill_value=0
-    ).reset_index()
-
-    # Flatten column names (dates become string columns)
-    pivot.columns.name = None
-    date_cols = [c for c in pivot.columns if c not in id_cols]
-    date_cols_sorted = sorted(date_cols)
-
-    # Rename date columns to readable format
-    date_col_map = {d: d.strftime("%d-%b-%y") if hasattr(d, "strftime") else str(d) for d in date_cols_sorted}
-    pivot = pivot.rename(columns=date_col_map)
-
-    # Reorder: id columns first, then sorted date columns
-    sorted_date_labels = [date_col_map[d] for d in date_cols_sorted]
-    pivot = pivot[id_cols + sorted_date_labels]
-
-    # Grand Total column
-    pivot["Grand Total"] = pivot[sorted_date_labels].sum(axis=1)
-
-    return pivot
-
-
-def download_pivot_beat_plan_button(pivot_df, key, filename_prefix="Beat_Plan"):
-    """
-    Export the pivot beat plan to Excel with formatting:
-    - Header row with date columns highlighted
-    - 1s shown as filled cells, 0s left blank (like portal format)
-    """
-    if pivot_df is None or pivot_df.empty:
-        return
-
-    output = io.BytesIO()
-
-    try:
-        from openpyxl import Workbook
-        from openpyxl.styles import (
-            PatternFill, Font, Alignment, Border, Side, GradientFill
-        )
-        from openpyxl.utils import get_column_letter
-
-        wb = Workbook()
-        ws = wb.active
-        ws.title = "Beat Plan"
-
-        # Identify column groups
-        id_cols = ["EmployeeCode", "EmployeeName", "GSTNumber", "Store", "City", "StoreID"]
-        id_cols_present = [c for c in id_cols if c in pivot_df.columns]
-        all_cols = list(pivot_df.columns)
-        date_cols = [c for c in all_cols if c not in id_cols_present and c != "Grand Total"]
-        has_grand_total = "Grand Total" in all_cols
-
-        # Write header row
-        header_row = all_cols
-        for col_idx, col_name in enumerate(header_row, 1):
-            cell = ws.cell(row=1, column=col_idx, value=col_name)
-            # Style: blue for identity cols, teal for date cols, dark for grand total
-            if col_name in id_cols_present:
-                cell.fill = PatternFill("solid", fgColor="1A56DB")
-                cell.font = Font(bold=True, color="FFFFFF", size=9)
-            elif col_name == "Grand Total":
-                cell.fill = PatternFill("solid", fgColor="0F172A")
-                cell.font = Font(bold=True, color="FFFFFF", size=9)
-            else:
-                cell.fill = PatternFill("solid", fgColor="06B6D4")
-                cell.font = Font(bold=True, color="FFFFFF", size=9)
-            cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-
-        # Thin border style
-        thin = Side(style="thin", color="CBD5E1")
-        border = Border(left=thin, right=thin, top=thin, bottom=thin)
-
-        # Write data rows
-        for row_idx, (_, row) in enumerate(pivot_df.iterrows(), 2):
-            # Alternate row background
-            row_fill_color = "F8FAFC" if row_idx % 2 == 0 else "FFFFFF"
-
-            for col_idx, col_name in enumerate(header_row, 1):
-                val = row[col_name]
-                cell = ws.cell(row=row_idx, column=col_idx)
-                cell.border = border
-
-                if col_name in id_cols_present:
-                    # Identity columns — plain text
-                    cell.value = str(val) if pd.notna(val) else ""
-                    cell.fill = PatternFill("solid", fgColor=row_fill_color)
-                    cell.font = Font(size=9)
-                    cell.alignment = Alignment(horizontal="left", vertical="center", wrap_text=False)
-
-                elif col_name == "Grand Total":
-                    # Grand total — bold number
-                    cell.value = int(val) if pd.notna(val) else 0
-                    cell.fill = PatternFill("solid", fgColor="1E293B")
-                    cell.font = Font(bold=True, color="FFFFFF", size=9)
-                    cell.alignment = Alignment(horizontal="center", vertical="center")
-
-                else:
-                    # Date columns — show 1 with green fill, 0 as blank
-                    int_val = int(val) if pd.notna(val) else 0
-                    if int_val > 0:
-                        cell.value = int_val
-                        cell.fill = PatternFill("solid", fgColor="D1FAE5")
-                        cell.font = Font(bold=True, color="065F46", size=9)
-                    else:
-                        cell.value = ""
-                        cell.fill = PatternFill("solid", fgColor=row_fill_color)
-                        cell.font = Font(color="94A3B8", size=9)
-                    cell.alignment = Alignment(horizontal="center", vertical="center")
-
-        # Column widths
-        col_widths = {
-            "EmployeeCode": 14,
-            "EmployeeName": 22,
-            "GSTNumber":    20,
-            "Store":        28,
-            "City":         14,
-            "StoreID":      14,
-            "Grand Total":  12,
-        }
-        for col_idx, col_name in enumerate(header_row, 1):
-            col_letter = get_column_letter(col_idx)
-            if col_name in col_widths:
-                ws.column_dimensions[col_letter].width = col_widths[col_name]
-            else:
-                # Date columns — narrow
-                ws.column_dimensions[col_letter].width = 10
-
-        # Freeze top row
-        ws.freeze_panes = "A2"
-
-        # Row height for header
-        ws.row_dimensions[1].height = 36
-
-        wb.save(output)
-
-    except ImportError:
-        # Fallback: plain export without formatting
-        with pd.ExcelWriter(output, engine="openpyxl") as writer:
-            pivot_df.to_excel(writer, index=False, sheet_name="Beat Plan")
-
-    output.seek(0)
-    st.download_button(
-        label="📥 Download Beat Plan — Portal Format (Excel)",
-        data=output.getvalue(),
-        file_name=f"{filename_prefix}_{date.today().strftime('%Y-%m-%d')}.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        use_container_width=True,
-        key=key,
-    )
-
 
 # ====================== LOGIN PAGE ======================
 if not st.session_state.logged_in:
@@ -811,6 +698,7 @@ if st.session_state.role == "admin":
                 if pend_emps.empty:
                     st.success("🎉 All employees have submitted today!")
                 else:
+                    # ── Excel export of today's pending employees ──
                     download_pending_button(pend_emps, "pend_dl_dash", date.today())
                     for _, row in pend_emps.iterrows():
                         ec = str(row.get("EmployeeCode", ""))
@@ -826,6 +714,33 @@ if st.session_state.role == "admin":
                                 </div>
                                 <div class='emp-badge badge-pending'>⏳ Pending</div>
                             </div>""", unsafe_allow_html=True)
+
+        st.markdown("---")
+        section_header("📦", "Pending Stores — Never Planned (Per Employee)")
+        st.caption("ℹ️ Stores assigned to an employee that have not been included in ANY beat plan yet (all-time).")
+        emp_list = emp_df.copy() if "EmployeeCode" in emp_df.columns else pd.DataFrame()
+        if emp_list.empty:
+            st.info("No employees found.")
+        else:
+            total_pending_stores = 0
+            any_pending = False
+            for _, erow in emp_list.iterrows():
+                ec = str(erow.get("EmployeeCode", ""))
+                en = erow.get("EmployeeName", ec)
+                pend_stores = get_pending_stores_for_employee(ec)
+                if pend_stores.empty:
+                    continue
+                any_pending = True
+                total_pending_stores += len(pend_stores)
+                with st.expander(f"⏳ {en} ({ec}) — {len(pend_stores)} store(s) never planned"):
+                    show_cols = [c for c in ["StoreID", "StoreName", "City", "GSTNumber"] if c in pend_stores.columns]
+                    st.dataframe(pend_stores[show_cols] if show_cols else pend_stores,
+                                 use_container_width=True, hide_index=True)
+                    download_pending_stores_button(pend_stores, f"pend_store_dl_{ec}", f"Pending_Stores_{ec}")
+            if not any_pending:
+                st.success("🎉 Every assigned store has been planned at least once by its employee!")
+            else:
+                st.caption(f"**{total_pending_stores}** store(s) across all employees have never been planned.")
 
         st.markdown("---")
         section_header("📋", "Recent Plans")
@@ -911,6 +826,7 @@ if st.session_state.role == "admin":
                 if pend_emps.empty:
                     st.success(f"🎉 All employees have submitted for {sel_date.strftime('%d %b %Y')}!")
                 else:
+                    # ── Excel export of pending employees for the selected date ──
                     download_pending_button(pend_emps, "pend_dl_status", sel_date)
                     for _, row in pend_emps.iterrows():
                         ec = str(row.get("EmployeeCode", ""))
@@ -956,6 +872,7 @@ if st.session_state.role == "admin":
                             "EmployeeName": ename.strip().title(),
                             "Password": epwd.strip(),
                         }
+                        # ── SAFE INSERT: only adds this one row, never touches existing rows ──
                         new_id = insert_employee_row(new_record)
                         if new_id is not None:
                             new_record["id"] = new_id
@@ -971,6 +888,7 @@ if st.session_state.role == "admin":
             else:
                 emp_del = st.selectbox("Select", safe_col(st.session_state.employee_df, "EmployeeCode").unique())
                 if st.button("🗑️ Delete", type="primary"):
+                    # ── SAFE DELETE: removes only this one row by EmployeeCode ──
                     if delete_employee_row(emp_del):
                         st.session_state.employee_df = st.session_state.employee_df[
                             safe_col(st.session_state.employee_df, "EmployeeCode") != emp_del
@@ -1014,6 +932,7 @@ if st.session_state.role == "admin":
                             "City": city.strip().title(),
                             "EmployeeCode": emp_sel,
                         }
+                        # ── SAFE INSERT: only adds this one row, never touches existing rows ──
                         new_id = insert_gst_row(new_record)
                         if new_id is not None:
                             new_record["id"] = new_id
@@ -1029,6 +948,7 @@ if st.session_state.role == "admin":
             else:
                 sdel = st.selectbox("Select Store", safe_col(st.session_state.gst_df, "StoreID").unique())
                 if st.button("🗑️ Delete Store", type="primary"):
+                    # ── SAFE DELETE: removes only this one row by StoreID ──
                     if delete_gst_row(sdel):
                         st.session_state.gst_df = st.session_state.gst_df[
                             safe_col(st.session_state.gst_df, "StoreID") != sdel
@@ -1036,134 +956,24 @@ if st.session_state.role == "admin":
                         st.success(f"✅ {sdel} deleted!")
                         st.rerun()
 
-    # ── VIEW PLANS (UPDATED WITH PIVOT FORMAT) ──
+    # ── VIEW PLANS ──
     elif admin_menu == "📋 View Plans":
-        st.markdown("### 📋 Visit Plans — Portal Format")
-        st.caption("📊 Beat plan shown in pivot format: stores as rows, visit dates as columns — matching the portal export style.")
-
-        plan_df = st.session_state.planned_df
-
-        # ── Filters ──
+        st.markdown("### 📋 All Visit Plans")
         c1, c2, c3 = st.columns(3)
-        with c1:
-            femp = st.selectbox(
-                "👤 Employee",
-                ["All"] + sorted(safe_col(plan_df, "EmployeeName").dropna().unique().tolist())
-            )
-        with c2:
-            fcity = st.selectbox(
-                "🌍 City",
-                ["All"] + sorted(safe_col(plan_df, "City").dropna().unique().tolist())
-            )
-        with c3:
-            drange = st.date_input(
-                "📅 Date Range",
-                value=(date.today() - timedelta(days=30), date.today())
-            )
+        with c1: femp  = st.selectbox("Employee", ["All"] + list(safe_col(st.session_state.planned_df, "EmployeeName").dropna().unique()))
+        with c2: fcity = st.selectbox("City",     ["All"] + list(safe_col(st.session_state.planned_df, "City").dropna().unique()))
+        with c3: drange = st.date_input("Date Range", value=(date.today()-timedelta(days=30), date.today()))
 
-        # Parse date range
-        if isinstance(drange, (list, tuple)) and len(drange) == 2:
-            dr = (drange[0], drange[1])
-        else:
-            dr = None
+        fp = st.session_state.planned_df.drop(columns=["id"], errors="ignore").copy()
+        if femp  != "All" and "EmployeeName" in fp.columns: fp = fp[fp["EmployeeName"] == femp]
+        if fcity != "All" and "City"         in fp.columns: fp = fp[fp["City"]          == fcity]
+        if isinstance(drange, (list, tuple)) and len(drange) == 2 and "VisitDate" in fp.columns:
+            fp = fp[(fp["VisitDate"] >= drange[0]) & (fp["VisitDate"] <= drange[1])]
 
-        # ── Build pivot ──
-        pivot_df = build_pivot_beat_plan(
-            plan_df,
-            emp_filter=femp,
-            city_filter=fcity,
-            date_range=dr,
-        )
-
-        # ── Summary metrics ──
-        if not pivot_df.empty:
-            id_cols_present = [c for c in ["EmployeeCode", "EmployeeName", "GSTNumber", "Store", "City", "StoreID"] if c in pivot_df.columns]
-            date_cols_display = [c for c in pivot_df.columns if c not in id_cols_present and c != "Grand Total"]
-            total_visits = int(pivot_df["Grand Total"].sum()) if "Grand Total" in pivot_df.columns else 0
-
-            mc1, mc2, mc3, mc4 = st.columns(4)
-            with mc1:
-                st.markdown(f"""
-                    <div class='metric-card blue'>
-                        <div class='metric-icon'>🏪</div>
-                        <div class='metric-label'>Store Rows</div>
-                        <div class='metric-value'>{len(pivot_df)}</div>
-                        <div class='metric-sub'>Unique store–employee pairs</div>
-                    </div>""", unsafe_allow_html=True)
-            with mc2:
-                st.markdown(f"""
-                    <div class='metric-card green'>
-                        <div class='metric-icon'>📅</div>
-                        <div class='metric-label'>Visit Dates</div>
-                        <div class='metric-value'>{len(date_cols_display)}</div>
-                        <div class='metric-sub'>Columns in plan</div>
-                    </div>""", unsafe_allow_html=True)
-            with mc3:
-                st.markdown(f"""
-                    <div class='metric-card purple'>
-                        <div class='metric-icon'>✅</div>
-                        <div class='metric-label'>Total Visits</div>
-                        <div class='metric-value'>{total_visits}</div>
-                        <div class='metric-sub'>Across selected range</div>
-                    </div>""", unsafe_allow_html=True)
-            with mc4:
-                unique_emps = pivot_df["EmployeeCode"].nunique() if "EmployeeCode" in pivot_df.columns else 0
-                st.markdown(f"""
-                    <div class='metric-card amber'>
-                        <div class='metric-icon'>👥</div>
-                        <div class='metric-label'>Employees</div>
-                        <div class='metric-value'>{unique_emps}</div>
-                        <div class='metric-sub'>In current view</div>
-                    </div>""", unsafe_allow_html=True)
-
-        st.markdown("---")
-
-        # ── View tabs: Pivot view + Raw list view ──
-        tab_pivot, tab_raw = st.tabs(["📊 Pivot View (Portal Format)", "📋 Raw List View"])
-
-        with tab_pivot:
-            if pivot_df is None or pivot_df.empty:
-                st.info("No data for the selected filters.")
-            else:
-                st.markdown(f"**{len(pivot_df)} store row(s) found — {len([c for c in pivot_df.columns if c not in ['EmployeeCode','EmployeeName','GSTNumber','Store','City','StoreID','Grand Total']])} date column(s)**")
-
-                # Render the pivot table
-                # Style: highlight cells > 0 in green
-                id_cols_p = [c for c in ["EmployeeCode", "EmployeeName", "GSTNumber", "Store", "City", "StoreID"] if c in pivot_df.columns]
-                date_cols_p = [c for c in pivot_df.columns if c not in id_cols_p and c != "Grand Total"]
-
-                def style_pivot(val, col_name):
-                    if col_name in id_cols_p:
-                        return ""
-                    if col_name == "Grand Total":
-                        return "background-color: #1e293b; color: white; font-weight: bold;"
-                    if isinstance(val, (int, float)) and val > 0:
-                        return "background-color: #d1fae5; color: #065f46; font-weight: bold; text-align: center;"
-                    return "color: #cbd5e1; text-align: center;"
-
-                styled = pivot_df.style.apply(
-                    lambda col: [style_pivot(v, col.name) for v in col], axis=0
-                )
-                st.dataframe(styled, use_container_width=True, hide_index=True, height=500)
-
-                st.markdown("---")
-                # Download button — portal-format Excel
-                download_pivot_beat_plan_button(pivot_df, "admin_pivot_dl", "Beat_Plan_Portal_Format")
-
-        with tab_raw:
-            # Original raw list view
-            fp = plan_df.drop(columns=["id"], errors="ignore").copy()
-            if femp  != "All" and "EmployeeName" in fp.columns: fp = fp[fp["EmployeeName"] == femp]
-            if fcity != "All" and "City"         in fp.columns: fp = fp[fp["City"]          == fcity]
-            if dr and "VisitDate" in fp.columns:
-                fp = fp[(fp["VisitDate"] >= dr[0]) & (fp["VisitDate"] <= dr[1])]
-
-            st.markdown(f"**{len(fp)} record(s) in raw list**")
-            st.dataframe(
-                fp.sort_values("VisitDate", ascending=False) if "VisitDate" in fp.columns else fp,
-                use_container_width=True, hide_index=True
-            )
-            download_beat_plan_button(fp, "admin_raw_dl", "Beat_Plan_Raw")
+        st.markdown(f"**{len(fp)} record(s) found**")
+        st.dataframe(fp.sort_values("VisitDate", ascending=False) if "VisitDate" in fp.columns else fp,
+                     use_container_width=True, hide_index=True)
+        download_beat_plan_button(fp, "admin_dl", "Beat_Plan_Admin")
 
     # ── REFRESH ──
     elif admin_menu == "🔄 Refresh Data":
@@ -1189,7 +999,7 @@ else:
 
     emp_menu = st.sidebar.radio(
         "Navigation",
-        ["🎯 New Beat Plan", "📅 My Plans", "📆 Upcoming Plans", "📊 Analytics", "➕ Request New Store"],
+        ["🎯 New Beat Plan", "📦 Pending Stores", "📅 My Plans", "📆 Upcoming Plans", "📊 Analytics", "➕ Request New Store"],
     )
 
     # ── NEW BEAT PLAN ──
@@ -1197,6 +1007,11 @@ else:
         if employee_stores.empty:
             st.warning("⚠️ No stores assigned. Contact Admin.")
             st.stop()
+
+        pending_stores_all = get_pending_stores_for_employee(emp_code)
+        if not pending_stores_all.empty:
+            st.warning(f"📦 You have **{len(pending_stores_all)}** store(s) that have never been planned. "
+                       f"Check the **📦 Pending Stores** tab in the sidebar.")
 
         c1, c2, c3 = st.columns(3)
         with c1:
@@ -1293,13 +1108,87 @@ else:
                                 st.rerun()
 
         st.markdown("---")
-        # Employee gets portal-format download too
         emp_plans = st.session_state.planned_df[
             safe_col(st.session_state.planned_df, "EmployeeCode").astype(str) == str(emp_code)]
-        if not emp_plans.empty:
-            pivot_emp = build_pivot_beat_plan(emp_plans)
-            if not pivot_emp.empty:
-                download_pivot_beat_plan_button(pivot_emp, "emp_pivot_dl", f"Beat_Plan_{emp_code}")
+        download_beat_plan_button(emp_plans, "emp_dl", f"Beat_Plan_{emp_code}")
+
+    # ── PENDING STORES (never planned) ──
+    elif emp_menu == "📦 Pending Stores":
+        st.markdown("### 📦 Pending Stores")
+        st.caption("ℹ️ Stores assigned to you that have not been included in ANY beat plan yet (all-time).")
+
+        pend_stores = get_pending_stores_for_employee(emp_code)
+
+        c1, c2 = st.columns(2)
+        with c1:
+            st.markdown(f"""
+                <div class='metric-card blue'>
+                    <div class='metric-icon'>🏪</div>
+                    <div class='metric-label'>Total Assigned Stores</div>
+                    <div class='metric-value'>{len(employee_stores)}</div>
+                </div>""", unsafe_allow_html=True)
+        with c2:
+            st.markdown(f"""
+                <div class='metric-card red'>
+                    <div class='metric-icon'>📦</div>
+                    <div class='metric-label'>Never Planned</div>
+                    <div class='metric-value'>{len(pend_stores)}</div>
+                </div>""", unsafe_allow_html=True)
+
+        st.markdown("---")
+
+        if pend_stores.empty:
+            st.success("🎉 You've planned every assigned store at least once!")
+        else:
+            search_q = st.text_input("🔍 Search pending stores…", key="pend_store_search", placeholder="Store name, city, GST…")
+            view_df = pend_stores.copy()
+            if search_q.strip():
+                q = search_q.strip().lower()
+                mask = (
+                    safe_col(view_df, "StoreName").str.lower().str.contains(q, na=False) |
+                    safe_col(view_df, "City").str.lower().str.contains(q, na=False) |
+                    safe_col(view_df, "GSTNumber").str.lower().str.contains(q, na=False)
+                )
+                view_df = view_df[mask]
+
+            section_header("📦", f"Never-Planned Stores ({len(view_df)})")
+            for idx, row in view_df.iterrows():
+                col1, col2 = st.columns([5, 1])
+                with col1:
+                    st.markdown(f"""
+                        <div class='store-card'>
+                            <div class='store-name'>🏪 {row.get('StoreName','—')}</div>
+                            <div class='store-meta'>
+                                <span class='store-chip'>📍 {row.get('City','—')}</span>
+                                <span class='store-chip'>🪪 {row.get('StoreID','—')}</span>
+                                <span class='store-chip'>🧾 {row.get('GSTNumber','—')}</span>
+                            </div>
+                        </div>""", unsafe_allow_html=True)
+                with col2:
+                    st.markdown("<br><br>", unsafe_allow_html=True)
+                    if st.button("➕ Plan Today", key=f"plan_pending_{idx}"):
+                        new_record = {
+                            "EmployeeCode": emp_code,
+                            "EmployeeName": emp_name,
+                            "City":         row.get("City", ""),
+                            "Store":        row.get("StoreName", ""),
+                            "StoreID":      row.get("StoreID", ""),
+                            "GSTNumber":    row.get("GSTNumber", ""),
+                            "VisitDate":    date.today(),
+                        }
+                        new_id = insert_planned_visit(new_record)
+                        if new_id is not None:
+                            new_record["id"] = new_id
+                            new_record["VisitDate"] = date.today()
+                            st.session_state.planned_df = pd.concat(
+                                [st.session_state.planned_df, pd.DataFrame([new_record])],
+                                ignore_index=True
+                            )
+                            st.success(f"✅ {row.get('StoreName','')} added to today's plan!")
+                            st.rerun()
+
+            st.markdown("---")
+            download_pending_stores_button(pend_stores, "emp_pend_store_dl", f"Pending_Stores_{emp_code}")
 
     # ── MY PLANS (with delete) ──
     elif emp_menu == "📅 My Plans":
@@ -1367,10 +1256,7 @@ else:
                                 st.rerun()
 
             st.markdown("---")
-            # Portal-format download for employee's own plans
-            pivot_my = build_pivot_beat_plan(my)
-            if not pivot_my.empty:
-                download_pivot_beat_plan_button(pivot_my, "my_pivot_dl", f"My_Plans_{emp_code}")
+            download_beat_plan_button(my, "my_dl", f"My_Plans_{emp_code}")
 
     # ── UPCOMING PLANS ──
     elif emp_menu == "📆 Upcoming Plans":
@@ -1452,6 +1338,7 @@ else:
                         "City": city.strip().title(),
                         "EmployeeCode": emp_code,
                     }
+                    # ── SAFE INSERT: only adds this one row, never touches existing rows ──
                     new_id = insert_gst_row(new_record)
                     if new_id is not None:
                         new_record["id"] = new_id
