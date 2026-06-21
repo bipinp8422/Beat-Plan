@@ -229,11 +229,6 @@ def clean_dataframe(df, expected_columns):
     return df
 
 def load_from_supabase(table_name, columns, keep_id=False):
-    """
-    Load all rows from a Supabase table.
-    If keep_id=True, the 'id' column is preserved in the returned DataFrame
-    (needed for row-level deletes / updates).
-    """
     try:
         all_rows = []
         batch_size = 1000
@@ -250,7 +245,7 @@ def load_from_supabase(table_name, columns, keep_id=False):
             df = pd.DataFrame(all_rows)
             df = clean_dataframe(df, columns)
             if keep_id and "id" in df.columns:
-                pass  # retain it
+                pass
             elif not keep_id and "id" in df.columns:
                 df = df.drop(columns=["id"])
             return df
@@ -259,10 +254,6 @@ def load_from_supabase(table_name, columns, keep_id=False):
         st.warning(f"⚠️ Error loading `{table_name}`: {e}")
         return pd.DataFrame(columns=columns)
 
-# ── DEPRECATED / DANGEROUS: kept only for admin_master (tiny, rarely-changed table) ──
-# DO NOT use this for gst_master, employee_master, or planned_visits.
-# It deletes the ENTIRE table then reinserts — if the insert step fails partway,
-# or session state is stale, real rows get permanently wiped.
 def save_master_to_supabase(table_name, df):
     try:
         df_copy = df.copy()
@@ -284,7 +275,6 @@ def save_master_to_supabase(table_name, df):
         st.error(f"❌ Save failed for `{table_name}`: {e}")
         return False
 
-# ── SAFE: insert a single new planned visit row ──
 def insert_planned_visit(record: dict):
     try:
         rec = {k: v for k, v in record.items() if k != "id"}
@@ -302,7 +292,6 @@ def insert_planned_visit(record: dict):
         st.error(f"❌ Insert failed: {e}")
         return None
 
-# ── SAFE: delete a single planned visit row by its Supabase id ──
 def delete_planned_visit(row_id):
     try:
         supabase.table("planned_visits").delete().eq("id", int(row_id)).execute()
@@ -311,11 +300,7 @@ def delete_planned_visit(row_id):
         st.error(f"❌ Delete failed: {e}")
         return False
 
-# ── SAFE: insert a single new store row into gst_master ──
 def insert_gst_row(record: dict):
-    """
-    Insert ONE new row into gst_master. Never touches existing rows.
-    """
     try:
         rec = {k: v for k, v in record.items() if k != "id"}
         response = supabase.table("gst_master").insert(rec).execute()
@@ -326,11 +311,7 @@ def insert_gst_row(record: dict):
         st.error(f"❌ Store insert failed: {e}")
         return None
 
-# ── SAFE: delete a single store row from gst_master by StoreID ──
 def delete_gst_row(store_id):
-    """
-    Delete ONE row from gst_master by StoreID. Never touches other rows.
-    """
     try:
         supabase.table("gst_master").delete().eq("StoreID", str(store_id)).execute()
         return True
@@ -338,11 +319,7 @@ def delete_gst_row(store_id):
         st.error(f"❌ Store delete failed: {e}")
         return False
 
-# ── SAFE: insert a single new employee row into employee_master ──
 def insert_employee_row(record: dict):
-    """
-    Insert ONE new row into employee_master. Never touches existing rows.
-    """
     try:
         rec = {k: v for k, v in record.items() if k != "id"}
         response = supabase.table("employee_master").insert(rec).execute()
@@ -353,11 +330,7 @@ def insert_employee_row(record: dict):
         st.error(f"❌ Employee insert failed: {e}")
         return None
 
-# ── SAFE: delete a single employee row from employee_master by EmployeeCode ──
 def delete_employee_row(emp_code):
-    """
-    Delete ONE row from employee_master by EmployeeCode. Never touches other rows.
-    """
     try:
         supabase.table("employee_master").delete().eq("EmployeeCode", str(emp_code)).execute()
         return True
@@ -400,10 +373,6 @@ def safe_col(df, col):
     return df[col] if col in df.columns else pd.Series([""] * len(df))
 
 def get_pending_stores_for_employee(emp_code):
-    """
-    Stores assigned to this employee in gst_master that have NEVER appeared
-    in planned_visits for this employee (all-time, any date).
-    """
     gst_df = st.session_state.gst_df
     plan_df = st.session_state.planned_df
 
@@ -440,9 +409,6 @@ def download_beat_plan_button(df, key, filename_prefix="Beat_Plan"):
         )
 
 def download_pending_button(pend_df, key, sel_date):
-    """
-    Excel export of pending (not-yet-submitted) employees for a given date.
-    """
     if pend_df is None or pend_df.empty:
         return
     cols = [c for c in ["EmployeeCode", "EmployeeName"] if c in pend_df.columns]
@@ -462,9 +428,6 @@ def download_pending_button(pend_df, key, sel_date):
     )
 
 def download_pending_stores_button(pend_df, key, filename_prefix="Pending_Stores"):
-    """
-    Excel export of stores that have never been planned.
-    """
     if pend_df is None or pend_df.empty:
         return
     cols = [c for c in ["EmployeeCode", "EmployeeName", "StoreID", "StoreName", "City", "GSTNumber"] if c in pend_df.columns]
@@ -483,11 +446,6 @@ def download_pending_stores_button(pend_df, key, filename_prefix="Pending_Stores
     )
 
 def render_pending_marquee(pend_stores):
-    """
-    Scrolling ticker of never-planned store names. Purely visual (no links —
-    links cause a hard page reload in Streamlit which resets login/session
-    state). Renders nothing if empty.
-    """
     if pend_stores is None or pend_stores.empty:
         return
     names = []
@@ -495,7 +453,6 @@ def render_pending_marquee(pend_stores):
         nm = r.get("StoreName", "—")
         ct = r.get("City", "")
         names.append(f"🏪 {nm} ({ct})" if ct else f"🏪 {nm}")
-    # repeat list so the scroll loop feels continuous
     content = "".join([f"<span>{n}</span>" for n in names * 2])
     st.markdown(f"""
         <div class='marquee-wrap'>
@@ -513,10 +470,6 @@ def section_header(icon, title):
         </div>""", unsafe_allow_html=True)
 
 def fetch_beat_status_live(sel_date):
-    """
-    Query Supabase DIRECTLY for planned_visits on sel_date.
-    Returns dict: { employee_code -> store_count }
-    """
     try:
         date_str = sel_date.strftime("%Y-%m-%d")
         all_rows = []
@@ -564,9 +517,6 @@ def fetch_beat_status_live(sel_date):
 
 
 def fetch_emp_plans_live(emp_code, sel_date):
-    """
-    Fetch full store details for one employee on one date, live from DB.
-    """
     try:
         date_str = sel_date.strftime("%Y-%m-%d")
         all_rows = []
@@ -745,7 +695,6 @@ if st.session_state.role == "admin":
                 if pend_emps.empty:
                     st.success("🎉 All employees have submitted today!")
                 else:
-                    # ── Excel export of today's pending employees ──
                     download_pending_button(pend_emps, "pend_dl_dash", date.today())
                     for _, row in pend_emps.iterrows():
                         ec = str(row.get("EmployeeCode", ""))
@@ -778,8 +727,15 @@ if st.session_state.role == "admin":
                 summary_rows.append({"EmployeeCode": ec, "EmployeeName": en, "PendingStores": len(pend_stores)})
                 if not pend_stores.empty:
                     tagged = pend_stores.copy()
-                    tagged.insert(0, "EmployeeName", en)
-                    tagged.insert(0, "EmployeeCode", ec)
+                    # ── FIX: check before inserting to avoid "column already exists" error ──
+                    if "EmployeeCode" not in tagged.columns:
+                        tagged.insert(0, "EmployeeCode", ec)
+                    else:
+                        tagged["EmployeeCode"] = ec
+                    if "EmployeeName" not in tagged.columns:
+                        tagged.insert(0, "EmployeeName", en)
+                    else:
+                        tagged["EmployeeName"] = en
                     all_pending_frames.append(tagged)
 
             summary_df = pd.DataFrame(summary_rows).sort_values("PendingStores", ascending=False)
@@ -910,7 +866,6 @@ if st.session_state.role == "admin":
                 if pend_emps.empty:
                     st.success(f"🎉 All employees have submitted for {sel_date.strftime('%d %b %Y')}!")
                 else:
-                    # ── Excel export of pending employees for the selected date ──
                     download_pending_button(pend_emps, "pend_dl_status", sel_date)
                     for _, row in pend_emps.iterrows():
                         ec = str(row.get("EmployeeCode", ""))
@@ -956,7 +911,6 @@ if st.session_state.role == "admin":
                             "EmployeeName": ename.strip().title(),
                             "Password": epwd.strip(),
                         }
-                        # ── SAFE INSERT: only adds this one row, never touches existing rows ──
                         new_id = insert_employee_row(new_record)
                         if new_id is not None:
                             new_record["id"] = new_id
@@ -972,7 +926,6 @@ if st.session_state.role == "admin":
             else:
                 emp_del = st.selectbox("Select", safe_col(st.session_state.employee_df, "EmployeeCode").unique())
                 if st.button("🗑️ Delete", type="primary"):
-                    # ── SAFE DELETE: removes only this one row by EmployeeCode ──
                     if delete_employee_row(emp_del):
                         st.session_state.employee_df = st.session_state.employee_df[
                             safe_col(st.session_state.employee_df, "EmployeeCode") != emp_del
@@ -1016,7 +969,6 @@ if st.session_state.role == "admin":
                             "City": city.strip().title(),
                             "EmployeeCode": emp_sel,
                         }
-                        # ── SAFE INSERT: only adds this one row, never touches existing rows ──
                         new_id = insert_gst_row(new_record)
                         if new_id is not None:
                             new_record["id"] = new_id
@@ -1032,7 +984,6 @@ if st.session_state.role == "admin":
             else:
                 sdel = st.selectbox("Select Store", safe_col(st.session_state.gst_df, "StoreID").unique())
                 if st.button("🗑️ Delete Store", type="primary"):
-                    # ── SAFE DELETE: removes only this one row by StoreID ──
                     if delete_gst_row(sdel):
                         st.session_state.gst_df = st.session_state.gst_df[
                             safe_col(st.session_state.gst_df, "StoreID") != sdel
@@ -1080,7 +1031,6 @@ else:
     pending_all = get_pending_stores_for_employee(emp_code)
     render_pending_marquee(pending_all)
 
-    # ── Quick-plan a never-planned store for any date (safe, no page reload) ──
     if not pending_all.empty:
         with st.expander(f"📦 Quick Plan a Never-Planned Store ({len(pending_all)} available)", expanded=False):
             store_options = {
@@ -1291,7 +1241,6 @@ else:
                 )
                 view_df = view_df[mask]
 
-            # how many stores are already planned on the chosen date (10/day cap)
             existing_on_date = st.session_state.planned_df[
                 (safe_col(st.session_state.planned_df, "EmployeeCode").astype(str) == str(emp_code)) &
                 (st.session_state.planned_df["VisitDate"] == plan_for_date)
@@ -1489,7 +1438,6 @@ else:
                         "City": city.strip().title(),
                         "EmployeeCode": emp_code,
                     }
-                    # ── SAFE INSERT: only adds this one row, never touches existing rows ──
                     new_id = insert_gst_row(new_record)
                     if new_id is not None:
                         new_record["id"] = new_id
