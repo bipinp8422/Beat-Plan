@@ -555,6 +555,41 @@ def fetch_emp_plans_live(emp_code, sel_date):
         st.warning(f"⚠️ Could not load details: {e}")
         return pd.DataFrame()
 
+# ====================== BEAT PLAN PIVOT BUILDER ======================
+def build_beat_plan_pivot(fp_df):
+    """
+    Builds a pivot exactly like the portal export:
+    rows = EmployeeCode, EmployeeName, GSTNumber, Store, City, StoreID
+    columns = one column per VisitDate (1 if planned that day, else 0)
+    plus a 'Grand Total' column = sum across all date columns.
+    """
+    pivot_index = [c for c in ["EmployeeCode", "EmployeeName", "GSTNumber", "Store", "City", "StoreID"] if c in fp_df.columns]
+    if not pivot_index or "VisitDate" not in fp_df.columns:
+        return pd.DataFrame()
+
+    pv = fp_df.copy()
+    pv["VisitDate"] = pd.to_datetime(pv["VisitDate"], errors="coerce")
+    pv = pv.dropna(subset=["VisitDate"])
+    if pv.empty:
+        return pd.DataFrame()
+
+    pivot = pv.pivot_table(
+        index=pivot_index,
+        columns="VisitDate",
+        values="VisitDate",
+        aggfunc="count",
+        fill_value=0,
+    )
+    pivot = pivot.reindex(sorted(pivot.columns), axis=1)
+    pivot.columns = [c.strftime("%Y-%m-%d") for c in pivot.columns]
+    pivot["Grand Total"] = pivot.sum(axis=1)
+    pivot = pivot.reset_index()
+    # reorder index columns to match the standard layout
+    ordered_front = [c for c in ["EmployeeCode", "EmployeeName", "GSTNumber", "Store", "City", "StoreID"] if c in pivot.columns]
+    other_cols = [c for c in pivot.columns if c not in ordered_front]
+    pivot = pivot[ordered_front + other_cols]
+    return pivot
+
 # ====================== LOGIN PAGE ======================
 if not st.session_state.logged_in:
     st.markdown("<h1 class='main-header'>🚀 Beat Plan Pro</h1>", unsafe_allow_html=True)
@@ -1006,9 +1041,34 @@ if st.session_state.role == "admin":
             fp = fp[(fp["VisitDate"] >= drange[0]) & (fp["VisitDate"] <= drange[1])]
 
         st.markdown(f"**{len(fp)} record(s) found**")
-        st.dataframe(fp.sort_values("VisitDate", ascending=False) if "VisitDate" in fp.columns else fp,
-                     use_container_width=True, hide_index=True)
-        download_beat_plan_button(fp, "admin_dl", "Beat_Plan_Admin")
+
+        view_tab1, view_tab2 = st.tabs(["📋 List View", "📊 Beat Plan (Pivot)"])
+
+        with view_tab1:
+            st.dataframe(fp.sort_values("VisitDate", ascending=False) if "VisitDate" in fp.columns else fp,
+                         use_container_width=True, hide_index=True)
+            download_beat_plan_button(fp, "admin_dl", "Beat_Plan_Admin")
+
+        with view_tab2:
+            st.caption("ℹ️ One row per employee/store, one column per visit date (1 = planned that day). Matches the portal's Beat Plan export format.")
+            pivot = build_beat_plan_pivot(fp)
+            if pivot.empty:
+                st.info("No data to pivot for the current filters.")
+            else:
+                st.dataframe(pivot, use_container_width=True, hide_index=True)
+
+                output = io.BytesIO()
+                with pd.ExcelWriter(output, engine="openpyxl") as writer:
+                    pivot.to_excel(writer, index=False, sheet_name="Beat Plan")
+                output.seek(0)
+                st.download_button(
+                    label="📥 Download Beat Plan (Pivot Excel)",
+                    data=output.getvalue(),
+                    file_name=f"Beat_Plan_Pivot_{date.today().strftime('%Y-%m-%d')}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True,
+                    key="pivot_dl_admin",
+                )
 
     # ── REFRESH ──
     elif admin_menu == "🔄 Refresh Data":
