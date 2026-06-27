@@ -662,32 +662,17 @@ def auto_plan_pending_stores_all_employees(dry_run=False):
             summary[ec] = {"name": en, "planned": [], "skipped": []}
             continue
 
-        # Per-employee slot count for each Sunday (seed from existing plans)
-        emp_sunday_counts = {}
-        for s in sundays:
-            if plan_df.empty or "VisitDate" not in plan_df.columns:
-                emp_sunday_counts[s] = 0
-            else:
-                emp_sunday_counts[s] = int(
-                    ((plan_df["VisitDate"] == s) &
-                     (plan_df.get("EmployeeCode", pd.Series()).astype(str).str.strip() == ec)).sum()
-                )
-
         emp_planned = []
         emp_skipped = []
 
-        for _, store_row in pending.iterrows():
-            # Find first Sunday (earliest) with slots remaining for this employee
-            target_sunday = None
-            for s in sundays:          # always start from the first Sunday
-                if emp_sunday_counts[s] < 10:
-                    target_sunday = s
-                    break
+        # Round-robin across all Sundays — NO hard cap per Sunday.
+        # store[0] → Sunday[0], store[1] → Sunday[1], ... wraps back to Sunday[0].
+        # This guarantees every pending store gets a date; nothing is skipped.
+        sunday_list = sundays  # sorted earliest → latest
+        n_sundays   = len(sunday_list)
 
-            if target_sunday is None:
-                # All Sundays are full for this employee
-                emp_skipped.append(store_row.get("StoreName", "—"))
-                continue
+        for store_idx, (_, store_row) in enumerate(pending.iterrows()):
+            target_sunday = sunday_list[store_idx % n_sundays]
 
             new_record = {
                 "EmployeeCode": ec,
@@ -704,15 +689,12 @@ def auto_plan_pending_stores_all_employees(dry_run=False):
                 if new_id is not None:
                     new_record["id"] = new_id
                     new_records.append(new_record)
-                    emp_sunday_counts[target_sunday] += 1
                     emp_planned.append(
                         f"{store_row.get('StoreName','—')} → {target_sunday.strftime('%d %b %Y')} (Sunday)"
                     )
                 else:
                     emp_skipped.append(store_row.get("StoreName", "—"))
             else:
-                # Dry run — count only, don't save
-                emp_sunday_counts[target_sunday] += 1
                 emp_planned.append(
                     f"{store_row.get('StoreName','—')} → {target_sunday.strftime('%d %b %Y')} (Sunday)"
                 )
