@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 from datetime import date, timedelta
+import calendar
 import re
 import io
 from supabase import create_client, Client
@@ -115,6 +116,19 @@ st.markdown("""
     .progress-track { height: 10px; background: #f1f5f9; border-radius: 10px; margin: 10px 0 6px; overflow: hidden; }
     .progress-fill  { height: 100%; border-radius: 10px; transition: width .4s ease; }
 
+    .info-banner {
+        background: linear-gradient(135deg, #eff6ff, #e0f2fe);
+        border: 1.5px solid #bfdbfe; border-radius: 12px;
+        padding: 14px 18px; margin-bottom: 16px;
+        font-size: 14px; color: #1e40af; font-weight: 600;
+    }
+    .warning-banner {
+        background: linear-gradient(135deg, #fff7ed, #fef2f2);
+        border: 1.5px solid #fed7aa; border-radius: 12px;
+        padding: 14px 18px; margin-bottom: 16px;
+        font-size: 14px; color: #9a3412; font-weight: 600;
+    }
+
     .stButton > button {
         border-radius: 10px !important; height: 44px !important;
         font-weight: 700 !important; font-size: 14px !important;
@@ -205,6 +219,37 @@ def normalize_columns(df):
                 rename[lower_map[key]] = expected
                 break
     return df.rename(columns=rename) if rename else df
+
+# ====================== DATE HELPERS ======================
+def get_next_month_range():
+    """Returns (first_day, last_day) of next month."""
+    today = date.today()
+    if today.month == 12:
+        nm_year, nm_month = today.year + 1, 1
+    else:
+        nm_year, nm_month = today.year, today.month + 1
+    first_day = date(nm_year, nm_month, 1)
+    last_day  = date(nm_year, nm_month, calendar.monthrange(nm_year, nm_month)[1])
+    return first_day, last_day
+
+def get_next_month_sundays():
+    """Returns a sorted list of all Sunday dates in next month."""
+    first_day, last_day = get_next_month_range()
+    sundays = []
+    d = first_day
+    while d <= last_day:
+        if d.weekday() == 6:  # Sunday
+            sundays.append(d)
+        d += timedelta(days=1)
+    return sundays
+
+def is_after_cutoff():
+    """Returns True if today's date is > 23 of current month."""
+    return date.today().day > 23
+
+def is_employee_planning_allowed():
+    """Employees can only plan for next month dates."""
+    return True  # Always allowed, but dates are restricted to next month
 
 # ====================== DATABASE FUNCTIONS ======================
 def init_db():
@@ -557,12 +602,6 @@ def fetch_emp_plans_live(emp_code, sel_date):
 
 # ====================== BEAT PLAN PIVOT BUILDER ======================
 def build_beat_plan_pivot(fp_df):
-    """
-    Builds a pivot exactly like the portal export:
-    rows = EmployeeCode, EmployeeName, GSTNumber, Store, City, StoreID
-    columns = one column per VisitDate (1 if planned that day, else 0)
-    plus a 'Grand Total' column = sum across all date columns.
-    """
     pivot_index = [c for c in ["EmployeeCode", "EmployeeName", "GSTNumber", "Store", "City", "StoreID"] if c in fp_df.columns]
     if not pivot_index or "VisitDate" not in fp_df.columns:
         return pd.DataFrame()
@@ -584,11 +623,136 @@ def build_beat_plan_pivot(fp_df):
     pivot.columns = [c.strftime("%Y-%m-%d") for c in pivot.columns]
     pivot["Grand Total"] = pivot.sum(axis=1)
     pivot = pivot.reset_index()
-    # reorder index columns to match the standard layout
     ordered_front = [c for c in ["EmployeeCode", "EmployeeName", "GSTNumber", "Store", "City", "StoreID"] if c in pivot.columns]
     other_cols = [c for c in pivot.columns if c not in ordered_front]
     pivot = pivot[ordered_front + other_cols]
     return pivot
+
+# ====================== AUTO-PLAN PENDING STORES (AFTER 23rd) ======================
+def auto_plan_pending_stores_all_employees(dry_run=False):
+    """
+    For every employee, find all never-planned stores and auto-schedule them
+    on next month's Sundays (max 10 stores per Sunday, cycling through Sundays).
+    Returns a summary dict: {emp_code: {"planned": [...], "skipped": [...]}}
+    """
+    emp_df  = st.session_state.employee_df
+    sundays = get_next_month_sundays()
+
+    if not sundays:
+        return {"error": "No Sundays found in next month."}
+
+    if emp_df.empty or "EmployeeCode" not in emp_df.columns:
+        return {"error": "No employees found."}
+
+    # Build a per-sunday slot tracker from BOTH session state and what we insert
+    # Key: sunday date → count of already-planned visits for that date
+    plan_df = st.session_state.planned_df.copy()
+
+    def get_sunday_slot_count(sunday_date):
+        if plan_df.empty or "VisitDate" not in plan_df.columns:
+            return 0
+        return int((plan_df["VisitDate"] == sunday_date).sum())
+
+    sunday_counts = {s: get_sunday_slot_count(s) for s in sundays}
+
+    summary = {}
+    new_records = []
+
+    for _, erow in emp_df.iterrows():
+        ec = str(erow.get("EmployeeCode", "")).strip()
+        en = erow.get("EmployeeName", ec)
+        if not ec or ec.lower() == "nan":
+            continue
+
+        pending = get_pending_stores_for_employee(ec)
+        if pending.empty:
+            summary[ec] = {"name": en, "planned": [], "skipped": []}
+            continue
+
+        emp_planned = []
+        emp_skipped = []
+        sunday_idx  = 0  # rotate through sundays
+
+        for _, store_row in pending.iterrows():
+            # Find next available sunday with < 10 slots
+            attempts = 0
+            while attempts < len(sundays):
+                s = sundays[sunday_idx % len(sundays)]
+                if sunday_counts[s] < 10:
+                    break
+                sunday_idx += 1
+                attempts   += 1
+            else:
+                # All sundays full
+                emp_skipped.append(store_row.get("StoreName", "—"))
+                continue
+
+            target_sunday = sundays[sunday_idx % len(sundays)]
+
+            new_record = {
+                "EmployeeCode": ec,
+                "EmployeeName": en,
+                "City":         store_row.get("City", ""),
+                "Store":        store_row.get("StoreName", ""),
+                "StoreID":      store_row.get("StoreID", ""),
+                "GSTNumber":    store_row.get("GSTNumber", ""),
+                "VisitDate":    target_sunday,
+            }
+
+            if not dry_run:
+                new_id = insert_planned_visit(new_record)
+                if new_id is not None:
+                    new_record["id"] = new_id
+                    new_records.append(new_record)
+                    sunday_counts[target_sunday] += 1
+                    emp_planned.append(f"{store_row.get('StoreName','—')} → {target_sunday.strftime('%d %b %Y')} (Sunday)")
+                    # Advance sunday index to distribute load
+                    sunday_idx += 1
+                else:
+                    emp_skipped.append(store_row.get("StoreName", "—"))
+            else:
+                # Dry run — just count
+                sunday_counts[target_sunday] += 1
+                emp_planned.append(f"{store_row.get('StoreName','—')} → {target_sunday.strftime('%d %b %Y')} (Sunday)")
+                sunday_idx += 1
+
+        summary[ec] = {"name": en, "planned": emp_planned, "skipped": emp_skipped}
+
+    # Update session state with newly inserted records
+    if not dry_run and new_records:
+        new_df = pd.DataFrame(new_records)
+        if "VisitDate" in new_df.columns:
+            new_df["VisitDate"] = pd.to_datetime(new_df["VisitDate"], errors="coerce").dt.date
+        st.session_state.planned_df = pd.concat(
+            [st.session_state.planned_df, new_df], ignore_index=True
+        )
+
+    return summary
+
+# ====================== NEXT-MONTH DATE INPUT HELPER ======================
+def next_month_date_input(label, key, default_to_first=True):
+    """
+    A date_input restricted to next month only.
+    Returns selected date or None if restriction not possible.
+    """
+    first_day, last_day = get_next_month_range()
+    default_val = first_day if default_to_first else min(last_day, first_day + timedelta(days=6))
+    # Find first Sunday of next month as default
+    d = first_day
+    while d <= last_day:
+        if d.weekday() == 6:
+            default_val = d
+            break
+        d += timedelta(days=1)
+
+    selected = st.date_input(
+        label,
+        value=default_val,
+        min_value=first_day,
+        max_value=last_day,
+        key=key,
+    )
+    return selected
 
 # ====================== LOGIN PAGE ======================
 if not st.session_state.logged_in:
@@ -662,7 +826,7 @@ if st.session_state.role == "admin":
 
     admin_menu = st.sidebar.radio(
         "Navigation",
-        ["📊 Dashboard", "📋 Beat Plan Status", "👥 Manage Employees", "🏪 Manage Stores", "📋 View Plans", "🔄 Refresh Data"],
+        ["📊 Dashboard", "📋 Beat Plan Status", "👥 Manage Employees", "🏪 Manage Stores", "📋 View Plans", "🤖 Auto-Plan (After 23rd)", "🔄 Refresh Data"],
     )
 
     # ── DASHBOARD ──
@@ -696,6 +860,18 @@ if st.session_state.role == "admin":
                         <div class='metric-value'>{val}</div>
                         <div class='metric-sub'>{sub}</div>
                     </div>""", unsafe_allow_html=True)
+
+        # Auto-plan notification banner
+        if is_after_cutoff():
+            first_day, last_day = get_next_month_range()
+            sundays = get_next_month_sundays()
+            sun_strs = ", ".join([s.strftime("%d %b") for s in sundays])
+            st.markdown(f"""
+                <div class='warning-banner'>
+                    🤖 <strong>Auto-Plan Available!</strong> Today is after the 23rd cutoff.
+                    Pending stores can be auto-scheduled on next month's Sundays ({sun_strs}).
+                    Go to <strong>🤖 Auto-Plan (After 23rd)</strong> in the sidebar.
+                </div>""", unsafe_allow_html=True)
 
         st.markdown("---")
         col_done, col_pend = st.columns(2)
@@ -762,7 +938,6 @@ if st.session_state.role == "admin":
                 summary_rows.append({"EmployeeCode": ec, "EmployeeName": en, "PendingStores": len(pend_stores)})
                 if not pend_stores.empty:
                     tagged = pend_stores.copy()
-                    # ── FIX: check before inserting to avoid "column already exists" error ──
                     if "EmployeeCode" not in tagged.columns:
                         tagged.insert(0, "EmployeeCode", ec)
                     else:
@@ -1070,6 +1245,133 @@ if st.session_state.role == "admin":
                     key="pivot_dl_admin",
                 )
 
+    # ── AUTO-PLAN (AFTER 23rd) ──
+    elif admin_menu == "🤖 Auto-Plan (After 23rd)":
+        st.markdown("### 🤖 Auto-Plan Pending Stores")
+
+        first_day, last_day = get_next_month_range()
+        sundays = get_next_month_sundays()
+        cutoff_passed = is_after_cutoff()
+
+        # Info banner
+        st.markdown(f"""
+            <div class='info-banner'>
+                📅 <strong>How it works:</strong> After the 23rd of each month, all never-planned stores
+                are automatically scheduled on the <strong>Sundays of next month
+                ({first_day.strftime('%B %Y')})</strong>.
+                Sundays available: {', '.join([s.strftime('%d %b') for s in sundays]) if sundays else 'None found'}.
+                Max <strong>10 stores per Sunday</strong>, distributed evenly across all employees.
+            </div>""", unsafe_allow_html=True)
+
+        if not cutoff_passed:
+            days_left = 23 - date.today().day
+            st.markdown(f"""
+                <div class='warning-banner'>
+                    🔒 <strong>Not yet available.</strong> Auto-plan unlocks after the 23rd of each month.
+                    <strong>{days_left} day(s)</strong> remaining until cutoff (today is {date.today().strftime('%d %b %Y')}).
+                    <br><br>You can still use the <strong>Preview (Dry Run)</strong> below to see what would be scheduled.
+                </div>""", unsafe_allow_html=True)
+
+        # Summary of pending stores
+        emp_df = st.session_state.employee_df
+        total_pending = 0
+        emp_pending_summary = []
+        if "EmployeeCode" in emp_df.columns:
+            for _, erow in emp_df.iterrows():
+                ec = str(erow.get("EmployeeCode", ""))
+                en = erow.get("EmployeeName", ec)
+                ps = get_pending_stores_for_employee(ec)
+                total_pending += len(ps)
+                emp_pending_summary.append({
+                    "EmployeeCode": ec, "EmployeeName": en, "PendingStores": len(ps)
+                })
+
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            st.markdown(f"""
+                <div class='metric-card amber'>
+                    <div class='metric-icon'>📦</div>
+                    <div class='metric-label'>Total Pending Stores</div>
+                    <div class='metric-value'>{total_pending}</div>
+                    <div class='metric-sub'>To be auto-planned</div>
+                </div>""", unsafe_allow_html=True)
+        with c2:
+            st.markdown(f"""
+                <div class='metric-card blue'>
+                    <div class='metric-icon'>📅</div>
+                    <div class='metric-label'>Available Sundays</div>
+                    <div class='metric-value'>{len(sundays)}</div>
+                    <div class='metric-sub'>{first_day.strftime('%B %Y')}</div>
+                </div>""", unsafe_allow_html=True)
+        with c3:
+            total_slots = len(sundays) * 10
+            st.markdown(f"""
+                <div class='metric-card green'>
+                    <div class='metric-icon'>🎯</div>
+                    <div class='metric-label'>Total Available Slots</div>
+                    <div class='metric-value'>{total_slots}</div>
+                    <div class='metric-sub'>10 stores × {len(sundays)} Sundays</div>
+                </div>""", unsafe_allow_html=True)
+
+        if emp_pending_summary:
+            st.markdown("#### 📊 Pending Stores by Employee")
+            st.dataframe(pd.DataFrame(emp_pending_summary).sort_values("PendingStores", ascending=False),
+                         use_container_width=True, hide_index=True)
+
+        st.markdown("---")
+
+        col_preview, col_run = st.columns(2)
+
+        with col_preview:
+            st.markdown("#### 🔍 Preview (Dry Run)")
+            st.caption("See what would be scheduled without actually saving anything.")
+            if st.button("🔍 Preview Auto-Plan", use_container_width=True, key="dry_run_btn"):
+                with st.spinner("🔄 Calculating preview…"):
+                    preview_result = auto_plan_pending_stores_all_employees(dry_run=True)
+                if "error" in preview_result:
+                    st.error(preview_result["error"])
+                else:
+                    total_would_plan = sum(len(v["planned"]) for v in preview_result.values())
+                    total_would_skip = sum(len(v["skipped"]) for v in preview_result.values())
+                    st.success(f"✅ Preview: {total_would_plan} stores would be planned, {total_would_skip} skipped (slots full).")
+                    for ec, data in preview_result.items():
+                        if data["planned"] or data["skipped"]:
+                            with st.expander(f"👤 {data['name']} ({ec}) — {len(data['planned'])} planned, {len(data['skipped'])} skipped"):
+                                if data["planned"]:
+                                    st.markdown("**Would be planned:**")
+                                    for p in data["planned"]:
+                                        st.markdown(f"  ✅ {p}")
+                                if data["skipped"]:
+                                    st.markdown("**Would be skipped (all Sundays full):**")
+                                    for s in data["skipped"]:
+                                        st.markdown(f"  ⚠️ {s}")
+
+        with col_run:
+            st.markdown("#### 🚀 Run Auto-Plan")
+            if cutoff_passed:
+                st.caption(f"✅ Cutoff passed (today is {date.today().strftime('%d %b')}). Ready to auto-plan.")
+                confirm = st.checkbox("✅ I confirm: auto-plan all pending stores on next month's Sundays", key="autoplan_confirm")
+                if st.button("🤖 Run Auto-Plan Now", use_container_width=True, key="autoplan_run", disabled=not confirm):
+                    with st.spinner("🔄 Auto-planning pending stores…"):
+                        result = auto_plan_pending_stores_all_employees(dry_run=False)
+                    if "error" in result:
+                        st.error(result["error"])
+                    else:
+                        total_planned = sum(len(v["planned"]) for v in result.values())
+                        total_skipped = sum(len(v["skipped"]) for v in result.values())
+                        st.success(f"🎉 Done! {total_planned} stores auto-planned across next month's Sundays. {total_skipped} skipped.")
+                        for ec, data in result.items():
+                            if data["planned"] or data["skipped"]:
+                                with st.expander(f"👤 {data['name']} ({ec}) — {len(data['planned'])} planned"):
+                                    for p in data["planned"]:
+                                        st.markdown(f"  ✅ {p}")
+                                    for s in data["skipped"]:
+                                        st.markdown(f"  ⚠️ Skipped: {s}")
+                        st.rerun()
+            else:
+                st.caption(f"🔒 Locked until after the 23rd (today is {date.today().strftime('%d %b')}).")
+                st.button("🔒 Auto-Plan Locked", disabled=True, use_container_width=True)
+
     # ── REFRESH ──
     elif admin_menu == "🔄 Refresh Data":
         st.info("Syncs latest data from Supabase.")
@@ -1088,6 +1390,17 @@ else:
     st.markdown(f"<h1 class='main-header'>👤 {emp_name}</h1>", unsafe_allow_html=True)
     st.markdown("<p class='sub-header'>Your Beat Planning Dashboard</p>", unsafe_allow_html=True)
 
+    # ── Next-month calendar notice ──
+    first_day, last_day = get_next_month_range()
+    sundays = get_next_month_sundays()
+    sun_strs = ", ".join([s.strftime("%d %b '%y") for s in sundays])
+    st.markdown(f"""
+        <div class='info-banner'>
+            📅 <strong>Planning is open for next month only:</strong>
+            {first_day.strftime('%d %b %Y')} – {last_day.strftime('%d %b %Y')} &nbsp;|&nbsp;
+            🗓️ Sundays: {sun_strs}
+        </div>""", unsafe_allow_html=True)
+
     pending_all = get_pending_stores_for_employee(emp_code)
     render_pending_marquee(pending_all)
 
@@ -1101,7 +1414,8 @@ else:
             with colA:
                 sel_label = st.selectbox("Select store", list(store_options.keys()), key="marquee_quick_store")
             with colB:
-                marquee_plan_date = st.date_input("📅 Plan for date", value=date.today(), key="marquee_plan_date")
+                # RESTRICTED to next month only
+                marquee_plan_date = next_month_date_input("📅 Plan for date", key="marquee_plan_date")
             with colC:
                 st.markdown("<br>", unsafe_allow_html=True)
                 confirm_clicked = st.button("✅ Plan It", key="marquee_confirm", use_container_width=True)
@@ -1156,11 +1470,10 @@ else:
             st.warning("⚠️ No stores assigned. Contact Admin.")
             st.stop()
 
-        pending_stores_all = get_pending_stores_for_employee(emp_code)
-
         c1, c2, c3 = st.columns(3)
         with c1:
-            visit_date = st.date_input("📅 Date", value=date.today(), key="beat_date")
+            # RESTRICTED: only next month's dates
+            visit_date = next_month_date_input("📅 Date (Next Month Only)", key="beat_date")
         with c2:
             city_opts  = sorted(safe_col(employee_stores, "City").dropna().unique().tolist())
             sel_cities = st.multiselect("🌍 Cities (max 3)", city_opts, max_selections=3, key="city_ms")
@@ -1168,6 +1481,11 @@ else:
             st.markdown("<br>", unsafe_allow_html=True)
             if st.button("🔍 Load Stores", use_container_width=True):
                 st.session_state.selected_cities = sel_cities
+
+        # Validate the selected date is in next month (safety check)
+        if not (first_day <= visit_date <= last_day):
+            st.error(f"🚫 Please select a date within next month ({first_day.strftime('%d %b')} – {last_day.strftime('%d %b %Y')}).")
+            st.stop()
 
         daily_plans = st.session_state.planned_df[
             (safe_col(st.session_state.planned_df, "EmployeeCode").astype(str) == str(emp_code)) &
@@ -1180,14 +1498,14 @@ else:
         st.markdown(f"""
             <div class='progress-wrap'>
                 <div style='display:flex;justify-content:space-between;'>
-                    <span class='progress-label'>Daily Progress — {visit_date.strftime('%d %b %Y')}</span>
+                    <span class='progress-label'>Daily Progress — {visit_date.strftime('%d %b %Y')} ({visit_date.strftime('%A')})</span>
                     <span style='font-weight:800;color:{pcol};font-size:18px;'>{pc}/10</span>
                 </div>
                 <div class='progress-track'>
                     <div class='progress-fill' style='width:{min(pc*10,100)}%;background:{pcol};'></div>
                 </div>
                 <div style='font-size:13px;color:#64748b;'>
-                    {"🚫 Maximum 10 stores reached." if pc >= 10 else f"✅ {10-pc} more store(s) can be added today."}
+                    {"🚫 Maximum 10 stores reached." if pc >= 10 else f"✅ {10-pc} more store(s) can be added for this date."}
                 </div>
             </div>""", unsafe_allow_html=True)
 
@@ -1289,7 +1607,8 @@ else:
             with col_search:
                 search_q = st.text_input("🔍 Search pending stores…", key="pend_store_search", placeholder="Store name, city, GST…")
             with col_date:
-                plan_for_date = st.date_input("📅 Plan for date", value=date.today(), key="pend_store_plan_date")
+                # RESTRICTED: only next month's dates
+                plan_for_date = next_month_date_input("📅 Plan for date (Next Month)", key="pend_store_plan_date")
 
             view_df = pend_stores.copy()
             if search_q.strip():
@@ -1308,7 +1627,7 @@ else:
             slots_left = 10 - len(existing_on_date)
 
             section_header("📦", f"Never-Planned Stores ({len(view_df)})")
-            st.caption(f"📅 Adding to **{plan_for_date.strftime('%d %b %Y')}** — {max(slots_left,0)} slot(s) left that day (max 10/day).")
+            st.caption(f"📅 Adding to **{plan_for_date.strftime('%A, %d %b %Y')}** — {max(slots_left,0)} slot(s) left that day (max 10/day).")
 
             for idx, row in view_df.iterrows():
                 col1, col2 = st.columns([5, 1])
@@ -1369,7 +1688,8 @@ else:
             with col_f1:
                 del_search = st.text_input("🔍 Search my plans…", placeholder="Store name, city…", key="my_plan_search")
             with col_f2:
-                date_filter = st.date_input("📅 Filter by date", value=date.today(), key="my_plan_date")
+                # Admin can view any date; employees see next month's filter defaulted
+                date_filter = st.date_input("📅 Filter by date", value=first_day, key="my_plan_date")
                 use_date    = st.checkbox("Apply date filter", key="my_plan_use_date")
 
             filtered = my.copy()
@@ -1425,14 +1745,15 @@ else:
         else:
             upcoming = st.session_state.planned_df[
                 (safe_col(st.session_state.planned_df, "EmployeeCode").astype(str) == str(emp_code)) &
-                (st.session_state.planned_df["VisitDate"] >= date.today())
+                (st.session_state.planned_df["VisitDate"] >= first_day)
             ].sort_values("VisitDate")
             if upcoming.empty:
-                st.info("No upcoming visits.")
+                st.info(f"No upcoming visits planned for next month ({first_day.strftime('%B %Y')}).")
             else:
                 for vdate in sorted(upcoming["VisitDate"].unique()):
                     plans = upcoming[upcoming["VisitDate"] == vdate]
-                    label = "🟢 Today" if vdate == date.today() else ""
+                    is_sunday = vdate.weekday() == 6
+                    label = "🔵 Sunday" if is_sunday else ""
                     st.markdown(f"""
                         <div style='background:#f0f9ff;border-left:4px solid #1a56db;
                              padding:12px 16px;border-radius:10px;margin-bottom:8px;'>
@@ -1455,9 +1776,9 @@ else:
             with c2: st.metric("Cities",       safe_col(my, "City").nunique())
             with c3: st.metric("Stores",       safe_col(my, "Store").nunique())
             with c4:
-                tm = my[pd.to_datetime(safe_col(my, "VisitDate"), errors="coerce").dt.month == date.today().month] \
+                nm = my[pd.to_datetime(safe_col(my, "VisitDate"), errors="coerce").dt.month == first_day.month] \
                     if "VisitDate" in my.columns else pd.DataFrame()
-                st.metric("This Month", len(tm))
+                st.metric(f"Next Month ({first_day.strftime('%b')})", len(nm))
             st.markdown("---")
             c1, c2 = st.columns(2)
             with c1:
