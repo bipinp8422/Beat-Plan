@@ -402,7 +402,7 @@ if "planned_df" not in st.session_state:
 if "admin_df" not in st.session_state:
     st.session_state.admin_df = load_from_supabase("admin_master", ADMIN_COLS)
 
-for k, v in {"logged_in": False, "role": "", "emp_code": "", "emp_name": "", "selected_cities": []}.items():
+for k, v in {"logged_in": False, "role": "", "emp_code": "", "emp_name": "", "selected_cities": [], "auto_plan_done_month": None}.items():
     if k not in st.session_state:
         st.session_state[k] = v
 
@@ -632,11 +632,13 @@ def build_beat_plan_pivot(fp_df):
 def auto_plan_pending_stores_all_employees(dry_run=False):
     """
     For every employee, find all never-planned stores and auto-schedule them
-    on next month's Sundays (max 10 stores per Sunday, cycling through Sundays).
+    starting on the FIRST Sunday of next month (the planning month).
+    Fill up to 10 stores per Sunday, then overflow to the next Sunday.
+    Each employee gets their OWN per-Sunday slot counter (10 per emp per Sunday).
     Returns a summary dict: {emp_code: {"planned": [...], "skipped": [...]}}
     """
     emp_df  = st.session_state.employee_df
-    sundays = get_next_month_sundays()
+    sundays = get_next_month_sundays()   # sorted list, earliest first
 
     if not sundays:
         return {"error": "No Sundays found in next month."}
@@ -644,18 +646,9 @@ def auto_plan_pending_stores_all_employees(dry_run=False):
     if emp_df.empty or "EmployeeCode" not in emp_df.columns:
         return {"error": "No employees found."}
 
-    # Build a per-sunday slot tracker from BOTH session state and what we insert
-    # Key: sunday date → count of already-planned visits for that date
     plan_df = st.session_state.planned_df.copy()
 
-    def get_sunday_slot_count(sunday_date):
-        if plan_df.empty or "VisitDate" not in plan_df.columns:
-            return 0
-        return int((plan_df["VisitDate"] == sunday_date).sum())
-
-    sunday_counts = {s: get_sunday_slot_count(s) for s in sundays}
-
-    summary = {}
+    summary     = {}
     new_records = []
 
     for _, erow in emp_df.iterrows():
@@ -669,25 +662,32 @@ def auto_plan_pending_stores_all_employees(dry_run=False):
             summary[ec] = {"name": en, "planned": [], "skipped": []}
             continue
 
+        # Per-employee slot count for each Sunday (seed from existing plans)
+        emp_sunday_counts = {}
+        for s in sundays:
+            if plan_df.empty or "VisitDate" not in plan_df.columns:
+                emp_sunday_counts[s] = 0
+            else:
+                emp_sunday_counts[s] = int(
+                    ((plan_df["VisitDate"] == s) &
+                     (plan_df.get("EmployeeCode", pd.Series()).astype(str).str.strip() == ec)).sum()
+                )
+
         emp_planned = []
         emp_skipped = []
-        sunday_idx  = 0  # rotate through sundays
 
         for _, store_row in pending.iterrows():
-            # Find next available sunday with < 10 slots
-            attempts = 0
-            while attempts < len(sundays):
-                s = sundays[sunday_idx % len(sundays)]
-                if sunday_counts[s] < 10:
+            # Find first Sunday (earliest) with slots remaining for this employee
+            target_sunday = None
+            for s in sundays:          # always start from the first Sunday
+                if emp_sunday_counts[s] < 10:
+                    target_sunday = s
                     break
-                sunday_idx += 1
-                attempts   += 1
-            else:
-                # All sundays full
+
+            if target_sunday is None:
+                # All Sundays are full for this employee
                 emp_skipped.append(store_row.get("StoreName", "—"))
                 continue
-
-            target_sunday = sundays[sunday_idx % len(sundays)]
 
             new_record = {
                 "EmployeeCode": ec,
@@ -704,17 +704,18 @@ def auto_plan_pending_stores_all_employees(dry_run=False):
                 if new_id is not None:
                     new_record["id"] = new_id
                     new_records.append(new_record)
-                    sunday_counts[target_sunday] += 1
-                    emp_planned.append(f"{store_row.get('StoreName','—')} → {target_sunday.strftime('%d %b %Y')} (Sunday)")
-                    # Advance sunday index to distribute load
-                    sunday_idx += 1
+                    emp_sunday_counts[target_sunday] += 1
+                    emp_planned.append(
+                        f"{store_row.get('StoreName','—')} → {target_sunday.strftime('%d %b %Y')} (Sunday)"
+                    )
                 else:
                     emp_skipped.append(store_row.get("StoreName", "—"))
             else:
-                # Dry run — just count
-                sunday_counts[target_sunday] += 1
-                emp_planned.append(f"{store_row.get('StoreName','—')} → {target_sunday.strftime('%d %b %Y')} (Sunday)")
-                sunday_idx += 1
+                # Dry run — count only, don't save
+                emp_sunday_counts[target_sunday] += 1
+                emp_planned.append(
+                    f"{store_row.get('StoreName','—')} → {target_sunday.strftime('%d %b %Y')} (Sunday)"
+                )
 
         summary[ec] = {"name": en, "planned": emp_planned, "skipped": emp_skipped}
 
@@ -728,6 +729,51 @@ def auto_plan_pending_stores_all_employees(dry_run=False):
         )
 
     return summary
+
+
+def run_auto_plan_if_needed():
+    """
+    Called once per session after login.
+    If today > 23, auto-plans all pending stores on next month's Sundays.
+    Uses session state flag so it only runs once per session, not on every rerun.
+    Safe to call multiple times — get_pending_stores_for_employee() skips already-planned stores.
+    """
+    if not is_after_cutoff():
+        return   # not yet time
+
+    if st.session_state.get("auto_plan_done_month") == date.today().month:
+        return   # already ran this session for this month
+
+    # Check if there's anything to plan before running
+    emp_df = st.session_state.employee_df
+    if emp_df.empty or "EmployeeCode" not in emp_df.columns:
+        return
+
+    has_pending = any(
+        not get_pending_stores_for_employee(str(erow.get("EmployeeCode", ""))).empty
+        for _, erow in emp_df.iterrows()
+    )
+    if not has_pending:
+        st.session_state.auto_plan_done_month = date.today().month
+        return
+
+    with st.spinner("🤖 Auto-planning pending stores on next month's Sundays…"):
+        result = auto_plan_pending_stores_all_employees(dry_run=False)
+
+    total_planned = sum(len(v.get("planned", [])) for v in result.values() if isinstance(v, dict))
+    total_skipped = sum(len(v.get("skipped", [])) for v in result.values() if isinstance(v, dict))
+
+    if total_planned > 0:
+        first_sunday = get_next_month_sundays()[0] if get_next_month_sundays() else None
+        sun_str = first_sunday.strftime("%d %b %Y") if first_sunday else "next month's Sundays"
+        st.toast(
+            f"🤖 Auto-plan complete: {total_planned} store(s) scheduled starting {sun_str}."
+            + (f" {total_skipped} skipped (slots full)." if total_skipped else ""),
+            icon="✅"
+        )
+
+    # Mark done for this month so we don't re-run every page load
+    st.session_state.auto_plan_done_month = date.today().month
 
 # ====================== NEXT-MONTH DATE INPUT HELPER ======================
 def next_month_date_input(label, key, default_to_first=True):
@@ -811,11 +857,16 @@ if not st.session_state.logged_in:
                             st.error("❌ Invalid credentials.")
     st.stop()
 
+# ====================== AUTO-PLAN TRIGGER (runs once per session after 23rd) ======================
+# Runs for both admin and employee sessions — safe because get_pending_stores_for_employee
+# only returns truly never-planned stores, so already-planned ones are never duplicated.
+run_auto_plan_if_needed()
+
 # ====================== LOGOUT ======================
 c1, c2, c3 = st.columns([10, 1, 1])
 with c3:
     if st.button("🚪 Logout", use_container_width=True):
-        for k, v in {"logged_in": False, "role": "", "emp_code": "", "emp_name": "", "selected_cities": []}.items():
+        for k, v in {"logged_in": False, "role": "", "emp_code": "", "emp_name": "", "selected_cities": [], "auto_plan_done_month": None}.items():
             st.session_state[k] = v
         st.rerun()
 
