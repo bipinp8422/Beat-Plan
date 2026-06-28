@@ -88,6 +88,13 @@ st.markdown("""
     .badge-pending { background: #fee2e2; color: #991b1b; }
     .emp-count { font-size: 13px; color: #64748b; font-weight: 600; margin-top: 3px; }
 
+    .role-chip {
+        display: inline-block; padding: 2px 10px; border-radius: 20px;
+        font-size: 11px; font-weight: 700; margin-left: 6px;
+    }
+    .role-chip.asm  { background: #ede9fe; color: #5b21b6; }
+    .role-chip.emp  { background: #e0f2fe; color: #075985; }
+
     .section-head {
         font-size: 15px; font-weight: 800; color: #1e293b; margin: 20px 0 12px;
         display: flex; align-items: center; gap: 8px;
@@ -198,6 +205,7 @@ COLUMN_MAP = {
     "EmployeeCode": ["employeecode", "employee_code"],
     "EmployeeName": ["employeename", "employee_name"],
     "Password":     ["password"],
+    "Role":         ["role", "user_role", "userrole"],
     "StoreID":      ["storeid", "store_id"],
     "StoreName":    ["storename", "store_name"],
     "GSTNumber":    ["gstnumber", "gst_number"],
@@ -271,6 +279,9 @@ def clean_dataframe(df, expected_columns):
         df[col] = df[col].astype(str).str.strip()
     if "VisitDate" in df.columns:
         df["VisitDate"] = pd.to_datetime(df["VisitDate"], errors="coerce").dt.date
+    if "Role" in df.columns:
+        df["Role"] = df["Role"].astype(str).str.strip()
+        df.loc[~df["Role"].isin(["Employee", "ASM"]), "Role"] = "Employee"
     return df
 
 def load_from_supabase(table_name, columns, keep_id=False):
@@ -384,7 +395,7 @@ def delete_employee_row(emp_code):
         return False
 
 # ====================== COLUMN CONSTANTS ======================
-EMP_COLS   = ["EmployeeCode", "EmployeeName", "Password"]
+EMP_COLS   = ["EmployeeCode", "EmployeeName", "Password", "Role"]
 GST_COLS   = ["StoreID", "StoreName", "GSTNumber", "City", "EmployeeCode"]
 PLAN_COLS  = ["EmployeeCode", "EmployeeName", "City", "Store", "GSTNumber", "StoreID", "VisitDate"]
 ADMIN_COLS = ["Username", "Password"]
@@ -402,7 +413,10 @@ if "planned_df" not in st.session_state:
 if "admin_df" not in st.session_state:
     st.session_state.admin_df = load_from_supabase("admin_master", ADMIN_COLS)
 
-for k, v in {"logged_in": False, "role": "", "emp_code": "", "emp_name": "", "selected_cities": [], "auto_plan_done_month": None}.items():
+for k, v in {
+    "logged_in": False, "role": "", "emp_code": "", "emp_name": "",
+    "is_asm": False, "selected_cities": [], "auto_plan_done_month": None
+}.items():
     if k not in st.session_state:
         st.session_state[k] = v
 
@@ -416,6 +430,23 @@ def get_progress_color(current, max_val):
 
 def safe_col(df, col):
     return df[col] if col in df.columns else pd.Series([""] * len(df))
+
+def gst_chip_html(row):
+    """Returns a GST chip only if a GST number is actually present (ASM stores may have none)."""
+    gst_val = str(row.get("GSTNumber", "") or "").strip()
+    if gst_val and gst_val.lower() not in ("nan", "none"):
+        return f"<span class='store-chip'>🧾 {gst_val}</span>"
+    return ""
+
+def get_employee_role(emp_code):
+    """Returns 'ASM' or 'Employee' for a given employee code."""
+    emp_df = st.session_state.employee_df
+    if emp_df.empty or "EmployeeCode" not in emp_df.columns:
+        return "Employee"
+    match = emp_df[emp_df["EmployeeCode"].astype(str) == str(emp_code)]
+    if match.empty:
+        return "Employee"
+    return str(match.iloc[0].get("Role", "Employee")).strip() or "Employee"
 
 def get_pending_stores_for_employee(emp_code):
     gst_df = st.session_state.gst_df
@@ -631,10 +662,9 @@ def build_beat_plan_pivot(fp_df):
 # ====================== AUTO-PLAN PENDING STORES (AFTER 23rd) ======================
 def auto_plan_pending_stores_all_employees(dry_run=False):
     """
-    For every employee, find all never-planned stores and auto-schedule them
+    For every employee (and ASM), find all never-planned stores and auto-schedule them
     starting on the FIRST Sunday of next month (the planning month).
-    Fill up to 10 stores per Sunday, then overflow to the next Sunday.
-    Each employee gets their OWN per-Sunday slot counter (10 per emp per Sunday).
+    Round-robins across all Sundays so nothing is skipped.
     Returns a summary dict: {emp_code: {"planned": [...], "skipped": [...]}}
     """
     emp_df  = st.session_state.employee_df
@@ -789,7 +819,7 @@ if not st.session_state.logged_in:
 
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
-        login_type = st.radio("Login Type", ["👨‍💼 Admin", "👷 Employee"], horizontal=True)
+        login_type = st.radio("Login Type", ["👨‍💼 Admin", "👷 Employee / ASM"], horizontal=True)
 
         if login_type == "👨‍💼 Admin":
             st.markdown("### Admin Login")
@@ -814,10 +844,11 @@ if not st.session_state.logged_in:
                         else:
                             st.error("❌ Invalid credentials.")
         else:
-            st.markdown("### Employee Login")
+            st.markdown("### Employee / ASM Login")
+            st.caption("Both Employees and Area Sales Managers (ASM) log in here using the same Employee Code.")
             emp_in = st.text_input("Employee Code", key="emp_code_login")
             pwd_in = st.text_input("Password", type="password", key="emp_pwd_login")
-            if st.button("🔓 Login as Employee", type="primary", use_container_width=True):
+            if st.button("🔓 Login", type="primary", use_container_width=True):
                 if not emp_in or not pwd_in:
                     st.error("❌ Enter both fields.")
                 else:
@@ -834,13 +865,14 @@ if not st.session_state.logged_in:
                             st.session_state.role      = "employee"
                             st.session_state.emp_code  = str(match.iloc[0]["EmployeeCode"])
                             st.session_state.emp_name  = match.iloc[0]["EmployeeName"]
+                            st.session_state.is_asm    = str(match.iloc[0].get("Role", "Employee")).strip() == "ASM"
                             st.rerun()
                         else:
                             st.error("❌ Invalid credentials.")
     st.stop()
 
 # ====================== AUTO-PLAN TRIGGER (runs once per session after 23rd) ======================
-# Runs for both admin and employee sessions — safe because get_pending_stores_for_employee
+# Runs for both admin and employee/ASM sessions — safe because get_pending_stores_for_employee
 # only returns truly never-planned stores, so already-planned ones are never duplicated.
 run_auto_plan_if_needed()
 
@@ -848,7 +880,10 @@ run_auto_plan_if_needed()
 c1, c2, c3 = st.columns([10, 1, 1])
 with c3:
     if st.button("🚪 Logout", use_container_width=True):
-        for k, v in {"logged_in": False, "role": "", "emp_code": "", "emp_name": "", "selected_cities": [], "auto_plan_done_month": None}.items():
+        for k, v in {
+            "logged_in": False, "role": "", "emp_code": "", "emp_name": "",
+            "is_asm": False, "selected_cities": [], "auto_plan_done_month": None
+        }.items():
             st.session_state[k] = v
         st.rerun()
 
@@ -878,7 +913,7 @@ if st.session_state.role == "admin":
 
         cols = st.columns(5)
         cards = [
-            ("blue",   "👥", "Total Employees", total_emp,          "Active accounts"),
+            ("blue",   "👥", "Total Employees", total_emp,          "Employees + ASM"),
             ("green",  "🏪", "Total Stores",    len(st.session_state.gst_df), "In database"),
             ("purple", "📋", "Total Plans",     len(plan_df),       "All time"),
             ("green",  "✅", "Done Today",      done_count,         "Beat plan submitted"),
@@ -920,12 +955,14 @@ if st.session_state.role == "admin":
                     ec  = str(row.get("EmployeeCode", ""))
                     en  = row.get("EmployeeName", ec)
                     cnt = live_status.get(ec, 0)
+                    role_val = str(row.get("Role", "Employee")).strip() or "Employee"
+                    role_chip = f"<span class='role-chip {'asm' if role_val=='ASM' else 'emp'}'>{'ASM' if role_val=='ASM' else 'Employee'}</span>"
                     initials = "".join([w[0] for w in en.split()[:2]]).upper()
                     st.markdown(f"""
                         <div class='emp-card'>
                             <div class='emp-avatar done'>{initials}</div>
                             <div class='emp-info'>
-                                <div class='emp-name'>{en}</div>
+                                <div class='emp-name'>{en} {role_chip}</div>
                                 <div class='emp-code'>{ec}</div>
                                 <div class='emp-count'>🏪 {cnt} store(s) in database</div>
                             </div>
@@ -943,12 +980,14 @@ if st.session_state.role == "admin":
                     for _, row in pend_emps.iterrows():
                         ec = str(row.get("EmployeeCode", ""))
                         en = row.get("EmployeeName", ec)
+                        role_val = str(row.get("Role", "Employee")).strip() or "Employee"
+                        role_chip = f"<span class='role-chip {'asm' if role_val=='ASM' else 'emp'}'>{'ASM' if role_val=='ASM' else 'Employee'}</span>"
                         initials = "".join([w[0] for w in en.split()[:2]]).upper()
                         st.markdown(f"""
                             <div class='emp-card'>
                                 <div class='emp-avatar pending'>{initials}</div>
                                 <div class='emp-info'>
-                                    <div class='emp-name'>{en}</div>
+                                    <div class='emp-name'>{en} {role_chip}</div>
                                     <div class='emp-code'>{ec}</div>
                                     <div class='emp-count'>No record found in database</div>
                                 </div>
@@ -956,8 +995,8 @@ if st.session_state.role == "admin":
                             </div>""", unsafe_allow_html=True)
 
         st.markdown("---")
-        section_header("📦", "Pending Stores — Never Planned (Per Employee)")
-        st.caption("ℹ️ Stores assigned to an employee that have not been included in ANY beat plan yet (all-time).")
+        section_header("📦", "Pending Stores — Never Planned (Per Employee/ASM)")
+        st.caption("ℹ️ Stores assigned to an employee/ASM that have not been included in ANY beat plan yet (all-time).")
         emp_list = emp_df.copy() if "EmployeeCode" in emp_df.columns else pd.DataFrame()
         if emp_list.empty:
             st.info("No employees found.")
@@ -991,7 +1030,7 @@ if st.session_state.role == "admin":
                         <div class='metric-icon'>📦</div>
                         <div class='metric-label'>Total Never-Planned Stores</div>
                         <div class='metric-value'>{total_pending_stores}</div>
-                        <div class='metric-sub'>Across all employees</div>
+                        <div class='metric-sub'>Across all employees/ASM</div>
                     </div>""", unsafe_allow_html=True)
             with c2:
                 emps_with_pending = int((summary_df["PendingStores"] > 0).sum())
@@ -1012,7 +1051,7 @@ if st.session_state.role == "admin":
             else:
                 st.success("🎉 Every assigned store has been planned at least once by its employee!")
 
-            st.markdown("#### 📋 Store-level Detail (Per Employee)")
+            st.markdown("#### 📋 Store-level Detail (Per Employee/ASM)")
             for _, erow in emp_list.iterrows():
                 ec = str(erow.get("EmployeeCode", ""))
                 en = erow.get("EmployeeName", ec)
@@ -1127,7 +1166,7 @@ if st.session_state.role == "admin":
 
     # ── MANAGE EMPLOYEES ──
     elif admin_menu == "👥 Manage Employees":
-        st.markdown("### 👥 Manage Employees")
+        st.markdown("### 👥 Manage Employees & ASM")
         tab1, tab2, tab3 = st.tabs(["👁️ View", "➕ Add", "🗑️ Delete"])
         with tab1:
             disp = st.session_state.employee_df.drop(columns=["Password"], errors="ignore")
@@ -1142,7 +1181,8 @@ if st.session_state.role == "admin":
                     ecode = st.text_input("Employee Code*")
                     ename = st.text_input("Employee Name*")
                 with c2:
-                    epwd = st.text_input("Password*", type="password")
+                    epwd  = st.text_input("Password*", type="password")
+                    erole = st.selectbox("Role*", ["Employee", "ASM"], help="ASM = Area Sales Manager. ASM stores don't require a GST number.")
                 if st.form_submit_button("➕ Add Employee", type="primary"):
                     if not ecode or not ename or not epwd:
                         st.error("All fields required!")
@@ -1153,6 +1193,7 @@ if st.session_state.role == "admin":
                             "EmployeeCode": ecode.strip().upper(),
                             "EmployeeName": ename.strip().title(),
                             "Password": epwd.strip(),
+                            "Role": erole,
                         }
                         new_id = insert_employee_row(new_record)
                         if new_id is not None:
@@ -1161,7 +1202,7 @@ if st.session_state.role == "admin":
                                 [st.session_state.employee_df, pd.DataFrame([new_record])],
                                 ignore_index=True
                             )
-                            st.success("✅ Added!")
+                            st.success(f"✅ Added as {erole}!")
                             st.rerun()
         with tab3:
             if st.session_state.employee_df.empty:
@@ -1179,6 +1220,7 @@ if st.session_state.role == "admin":
     # ── MANAGE STORES ──
     elif admin_menu == "🏪 Manage Stores":
         st.markdown("### 🏪 Manage Stores")
+        st.caption("ℹ️ GST Number is required for stores assigned to Employees. For ASM, GST is optional (ASM stores often don't have a GST number).")
         tab1, tab2, tab3 = st.tabs(["👁️ View", "➕ Add", "🗑️ Delete"])
         with tab1:
             if not st.session_state.gst_df.empty:
@@ -1186,29 +1228,39 @@ if st.session_state.role == "admin":
             else:
                 st.info("No stores found.")
         with tab2:
+            emp_opts = safe_col(st.session_state.employee_df, "EmployeeCode").unique().tolist() or ["—"]
+            emp_sel = st.selectbox("Assign to Employee/ASM*", emp_opts, key="store_assign_emp")
+            assigned_role = get_employee_role(emp_sel)
+            gst_required = assigned_role != "ASM"
+            if assigned_role == "ASM":
+                st.info("ℹ️ This is an ASM — GST Number is optional for this store.")
+
             with st.form("add_store"):
                 c1, c2 = st.columns(2)
                 with c1:
                     sname = st.text_input("Store Name*")
-                    gstno = st.text_input("GST Number*", max_chars=15)
-                with c2:
                     city  = st.text_input("City*")
-                    emp_opts = safe_col(st.session_state.employee_df, "EmployeeCode").unique().tolist() or ["—"]
-                    emp_sel  = st.selectbox("Assign to Employee*", emp_opts)
+                with c2:
+                    gstno = st.text_input(
+                        f"GST Number{'*' if gst_required else ' (optional for ASM)'}",
+                        max_chars=15
+                    )
                 if st.form_submit_button("➕ Add Store", type="primary"):
                     gc = gstno.strip().upper()
-                    if not sname or not gc or not city:
-                        st.error("All fields required!")
-                    elif not is_valid_gstin(gc):
+                    if not sname or not city:
+                        st.error("Store name and city are required!")
+                    elif gst_required and not gc:
+                        st.error("❌ GST Number required for stores assigned to an Employee!")
+                    elif gc and not is_valid_gstin(gc):
                         st.error("❌ Invalid GST! e.g. 22AAAAA0000A1Z5")
-                    elif safe_col(st.session_state.gst_df, "GSTNumber").astype(str).str.upper().eq(gc).any():
+                    elif gc and safe_col(st.session_state.gst_df, "GSTNumber").astype(str).str.upper().eq(gc).any():
                         st.error("❌ GST exists!")
                     else:
                         nid = f"S{len(st.session_state.gst_df)+1:05d}"
                         new_record = {
                             "StoreID": nid,
                             "StoreName": sname.strip().title(),
-                            "GSTNumber": gc,
+                            "GSTNumber": gc,  # may be blank for ASM
                             "City": city.strip().title(),
                             "EmployeeCode": emp_sel,
                         }
@@ -1258,7 +1310,7 @@ if st.session_state.role == "admin":
             download_beat_plan_button(fp, "admin_dl", "Beat_Plan_Admin")
 
         with view_tab2:
-            st.caption("ℹ️ One row per employee/store, one column per visit date (1 = planned that day). Matches the portal's Beat Plan export format.")
+            st.caption("ℹ️ One row per employee/store, one column per visit date (1 = planned that day). GST may be blank for ASM stores. Matches the portal's Beat Plan export format.")
             pivot = build_beat_plan_pivot(fp)
             if pivot.empty:
                 st.info("No data to pivot for the current filters.")
@@ -1290,10 +1342,10 @@ if st.session_state.role == "admin":
         st.markdown(f"""
             <div class='info-banner'>
                 📅 <strong>How it works:</strong> After the 23rd of each month, all never-planned stores
-                are automatically scheduled on the <strong>Sundays of next month
+                (Employee or ASM) are automatically scheduled on the <strong>Sundays of next month
                 ({first_day.strftime('%B %Y')})</strong>.
                 Sundays available: {', '.join([s.strftime('%d %b') for s in sundays]) if sundays else 'None found'}.
-                Max <strong>10 stores per Sunday</strong>, distributed evenly across all employees.
+                Stores are distributed evenly across all available Sundays.
             </div>""", unsafe_allow_html=True)
 
         if not cutoff_passed:
@@ -1347,7 +1399,7 @@ if st.session_state.role == "admin":
                 </div>""", unsafe_allow_html=True)
 
         if emp_pending_summary:
-            st.markdown("#### 📊 Pending Stores by Employee")
+            st.markdown("#### 📊 Pending Stores by Employee/ASM")
             st.dataframe(pd.DataFrame(emp_pending_summary).sort_values("PendingStores", ascending=False),
                          use_container_width=True, hide_index=True)
 
@@ -1415,13 +1467,20 @@ if st.session_state.role == "admin":
             st.session_state.admin_df    = load_from_supabase("admin_master",    ADMIN_COLS)
             st.success("✅ Refreshed!"); st.rerun()
 
-# ====================== EMPLOYEE PANEL ======================
+# ====================== EMPLOYEE / ASM PANEL ======================
 else:
     emp_code = st.session_state.emp_code
     emp_name = st.session_state.emp_name
+    is_asm   = st.session_state.get("is_asm", False)
 
-    st.markdown(f"<h1 class='main-header'>👤 {emp_name}</h1>", unsafe_allow_html=True)
-    st.markdown("<p class='sub-header'>Your Beat Planning Dashboard</p>", unsafe_allow_html=True)
+    role_label = "🧭 Area Sales Manager" if is_asm else "👤 Employee"
+    st.markdown(f"<h1 class='main-header'>{role_label} — {emp_name}</h1>", unsafe_allow_html=True)
+    st.markdown(
+        "<p class='sub-header'>Your Beat Planning Dashboard"
+        + (" &nbsp;|&nbsp; GST Number not required for ASM stores" if is_asm else "")
+        + "</p>",
+        unsafe_allow_html=True
+    )
 
     # ── Next-month calendar notice ──
     first_day, last_day = get_next_month_range()
@@ -1577,7 +1636,7 @@ else:
                                 <div class='store-meta'>
                                     <span class='store-chip'>📍 {row.get('City','—')}</span>
                                     <span class='store-chip'>🪪 {row.get('StoreID','—')}</span>
-                                    <span class='store-chip'>🧾 {row.get('GSTNumber','—')}</span>
+                                    {gst_chip_html(row)}
                                 </div>
                             </div>""", unsafe_allow_html=True)
                     with col2:
@@ -1611,7 +1670,7 @@ else:
     # ── PENDING STORES (never planned) ──
     elif emp_menu == "📦 Pending Stores":
         st.markdown("### 📦 Pending Stores")
-        st.caption("ℹ️ Stores assigned to you that have not been included in ANY beat plan yet (all-time).")
+        st.caption("ℹ️ Stores assigned to you that have not been included in ANY beat plan yet (all-time). GST may be blank for ASM stores.")
 
         pend_stores = get_pending_stores_for_employee(emp_code)
 
@@ -1671,7 +1730,7 @@ else:
                             <div class='store-meta'>
                                 <span class='store-chip'>📍 {row.get('City','—')}</span>
                                 <span class='store-chip'>🪪 {row.get('StoreID','—')}</span>
-                                <span class='store-chip'>🧾 {row.get('GSTNumber','—')}</span>
+                                {gst_chip_html(row)}
                             </div>
                         </div>""", unsafe_allow_html=True)
                 with col2:
@@ -1746,12 +1805,14 @@ else:
                     with col_info:
                         vd = row.get("VisitDate", "")
                         vd_str = vd.strftime("%d %b %Y") if hasattr(vd, "strftime") else str(vd)
+                        gst_disp = str(row.get('GSTNumber', '') or '').strip()
+                        gst_line = f" &nbsp;|&nbsp; 🧾 {gst_disp}" if gst_disp and gst_disp.lower() not in ("nan", "none") else ""
                         st.markdown(f"""
                             <div class='del-row'>
                                 <div style='font-size:24px;'>🏪</div>
                                 <div class='del-info'>
                                     <div style='font-weight:700;font-size:15px;'>{row.get('Store','—')}</div>
-                                    <div class='del-date'>📍 {row.get('City','—')} &nbsp;|&nbsp; 🧾 {row.get('GSTNumber','—')} &nbsp;|&nbsp; 📅 {vd_str}</div>
+                                    <div class='del-date'>📍 {row.get('City','—')}{gst_line} &nbsp;|&nbsp; 📅 {vd_str}</div>
                                 </div>
                             </div>""", unsafe_allow_html=True)
                     with col_del:
@@ -1827,28 +1888,32 @@ else:
     # ── REQUEST NEW STORE ──
     elif emp_menu == "➕ Request New Store":
         st.subheader("➕ Add New Store")
+        if is_asm:
+            st.caption("ℹ️ As an ASM, GST Number is optional for your stores.")
         with st.form("store_req"):
             c1, c2 = st.columns(2)
             with c1:
                 sname = st.text_input("Store Name*")
                 city  = st.text_input("City*")
             with c2:
-                gst   = st.text_input("GST Number*", max_chars=15)
-                _     = st.text_area("Remarks (optional)", height=100)
+                gst = st.text_input(f"GST Number{'*' if not is_asm else ' (optional)'}", max_chars=15)
+                _   = st.text_area("Remarks (optional)", height=100)
             if st.form_submit_button("✅ Add Store", type="primary"):
                 gc = gst.strip().upper()
-                if not sname or not city or not gc:
-                    st.error("❌ All fields required!")
-                elif not is_valid_gstin(gc):
+                if not sname or not city:
+                    st.error("❌ Store name and city are required!")
+                elif not is_asm and not gc:
+                    st.error("❌ GST Number required!")
+                elif gc and not is_valid_gstin(gc):
                     st.error("❌ Invalid GST! e.g. 22AAAAA0000A1Z5")
-                elif safe_col(st.session_state.gst_df, "GSTNumber").astype(str).str.upper().eq(gc).any():
+                elif gc and safe_col(st.session_state.gst_df, "GSTNumber").astype(str).str.upper().eq(gc).any():
                     st.error("❌ GST exists!")
                 else:
                     nid = f"S{len(st.session_state.gst_df)+1:05d}"
                     new_record = {
                         "StoreID": nid,
                         "StoreName": sname.strip().title(),
-                        "GSTNumber": gc,
+                        "GSTNumber": gc,  # may be blank for ASM
                         "City": city.strip().title(),
                         "EmployeeCode": emp_code,
                     }
