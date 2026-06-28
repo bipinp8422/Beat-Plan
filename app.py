@@ -275,8 +275,16 @@ def clean_dataframe(df, expected_columns):
     for col in expected_columns:
         if col not in df.columns:
             df[col] = ""
-    for col in df.select_dtypes(include=["object"]).columns:
+    # Replace any NaN/None across ALL columns with "" BEFORE string conversion,
+    # so blank GST numbers (common for ASM stores) never end up as float NaN
+    # (float NaN breaks JSON serialization on Supabase inserts).
+    date_cols = {"VisitDate"}
+    for col in df.columns:
+        if col in date_cols:
+            continue
+        df[col] = df[col].where(df[col].notna(), "")
         df[col] = df[col].astype(str).str.strip()
+        df[col] = df[col].replace({"nan": "", "None": "", "NaN": ""})
     if "VisitDate" in df.columns:
         df["VisitDate"] = pd.to_datetime(df["VisitDate"], errors="coerce").dt.date
     if "Role" in df.columns:
@@ -331,6 +339,21 @@ def save_master_to_supabase(table_name, df):
         st.error(f"❌ Save failed for `{table_name}`: {e}")
         return False
 
+def sanitize_record(record: dict) -> dict:
+    """Replace NaN/None/'nan' values with '' so Supabase's JSON encoder never chokes
+    on a stray float NaN (common when a GST/optional field is blank, e.g. ASM stores)."""
+    clean = {}
+    for k, v in record.items():
+        if v is None:
+            clean[k] = ""
+        elif isinstance(v, float) and pd.isna(v):
+            clean[k] = ""
+        elif isinstance(v, str) and v.strip().lower() in ("nan", "none"):
+            clean[k] = ""
+        else:
+            clean[k] = v
+    return clean
+
 def insert_planned_visit(record: dict):
     try:
         rec = {k: v for k, v in record.items() if k != "id"}
@@ -340,6 +363,7 @@ def insert_planned_visit(record: dict):
                 rec["VisitDate"] = v.strftime("%Y-%m-%d")
             else:
                 rec["VisitDate"] = str(v)
+        rec = sanitize_record(rec)
         response = supabase.table("planned_visits").insert(rec).execute()
         if response.data:
             return response.data[0].get("id")
@@ -359,6 +383,7 @@ def delete_planned_visit(row_id):
 def insert_gst_row(record: dict):
     try:
         rec = {k: v for k, v in record.items() if k != "id"}
+        rec = sanitize_record(rec)
         response = supabase.table("gst_master").insert(rec).execute()
         if response.data:
             return response.data[0].get("id")
@@ -378,6 +403,7 @@ def delete_gst_row(store_id):
 def insert_employee_row(record: dict):
     try:
         rec = {k: v for k, v in record.items() if k != "id"}
+        rec = sanitize_record(rec)
         response = supabase.table("employee_master").insert(rec).execute()
         if response.data:
             return response.data[0].get("id")
