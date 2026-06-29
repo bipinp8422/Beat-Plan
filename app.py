@@ -228,6 +228,18 @@ def normalize_columns(df):
                 break
     return df.rename(columns=rename) if rename else df
 
+_HTML_TAG_RE = re.compile(r"<[^>]*>")
+
+def strip_html_tags(value):
+    """Removes any stray HTML tags (e.g. accidentally pasted '</div>') from a value
+    so they never leak into the app's unsafe_allow_html-rendered cards."""
+    if value is None:
+        return value
+    s = str(value)
+    if "<" in s and ">" in s:
+        s = _HTML_TAG_RE.sub("", s)
+    return s
+
 # ====================== DATE HELPERS ======================
 def get_next_month_range():
     """Returns (first_day, last_day) of next month."""
@@ -285,6 +297,7 @@ def clean_dataframe(df, expected_columns):
         df[col] = df[col].where(df[col].notna(), "")
         df[col] = df[col].astype(str).str.strip()
         df[col] = df[col].replace({"nan": "", "None": "", "NaN": ""})
+        df[col] = df[col].apply(strip_html_tags)
     if "VisitDate" in df.columns:
         df["VisitDate"] = pd.to_datetime(df["VisitDate"], errors="coerce").dt.date
     if "Role" in df.columns:
@@ -341,15 +354,20 @@ def save_master_to_supabase(table_name, df):
 
 def sanitize_record(record: dict) -> dict:
     """Replace NaN/None/'nan' values with '' so Supabase's JSON encoder never chokes
-    on a stray float NaN (common when a GST/optional field is blank, e.g. ASM stores)."""
+    on a stray float NaN (common when a GST/optional field is blank, e.g. ASM stores).
+    Also strips any stray HTML tags so pasted markup can never reach the DB or UI."""
     clean = {}
     for k, v in record.items():
         if v is None:
             clean[k] = ""
         elif isinstance(v, float) and pd.isna(v):
             clean[k] = ""
-        elif isinstance(v, str) and v.strip().lower() in ("nan", "none"):
-            clean[k] = ""
+        elif isinstance(v, str):
+            sv = v.strip()
+            if sv.lower() in ("nan", "none"):
+                clean[k] = ""
+            else:
+                clean[k] = strip_html_tags(sv)
         else:
             clean[k] = v
     return clean
