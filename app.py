@@ -201,6 +201,12 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ====================== COLUMN NAME NORMALIZER ======================
+# NOTE: Your actual Supabase tables use lowercase column names
+# (e.g. storeid, storename, gstnumber, city, employeecode, visitdate, ...).
+# Internally, this app works with "pretty" PascalCase names
+# (StoreID, StoreName, GSTNumber, City, ...) for readability.
+# normalize_columns() converts DB (lowercase) -> App (PascalCase) on READ.
+# to_db_record() / to_db_columns() convert App (PascalCase) -> DB (lowercase) on WRITE.
 COLUMN_MAP = {
     "EmployeeCode": ["employeecode", "employee_code"],
     "EmployeeName": ["employeename", "employee_name"],
@@ -215,6 +221,11 @@ COLUMN_MAP = {
     "Username":     ["username"],
 }
 
+# Reverse map: App-facing PascalCase key -> actual lowercase DB column name.
+# Falls back to a plain .lower() of the key for anything not explicitly listed,
+# which safely covers "id" and any future/unknown columns.
+PASCAL_TO_DB = {expected: variants[0] for expected, variants in COLUMN_MAP.items()}
+
 def normalize_columns(df):
     rename = {}
     lower_map = {c.lower().replace("_", ""): c for c in df.columns}
@@ -227,6 +238,23 @@ def normalize_columns(df):
                 rename[lower_map[key]] = expected
                 break
     return df.rename(columns=rename) if rename else df
+
+def to_db_key(key):
+    """Converts an internal PascalCase key (e.g. 'StoreID') to the actual
+    lowercase Supabase column name (e.g. 'storeid')."""
+    if key in PASCAL_TO_DB:
+        return PASCAL_TO_DB[key]
+    return str(key).lower()
+
+def to_db_record(record: dict) -> dict:
+    """Converts an entire record's keys from internal PascalCase to the
+    actual lowercase DB column names before sending to Supabase."""
+    return {to_db_key(k): v for k, v in record.items()}
+
+def to_db_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Renames a DataFrame's columns from internal PascalCase to actual
+    lowercase DB column names before bulk insert."""
+    return df.rename(columns={c: to_db_key(c) for c in df.columns})
 
 _HTML_TAG_RE = re.compile(r"<[^>]*>")
 
@@ -339,6 +367,8 @@ def save_master_to_supabase(table_name, df):
         for col in df_copy.columns:
             if col == "VisitDate" or pd.api.types.is_datetime64_any_dtype(df_copy[col]):
                 df_copy[col] = pd.to_datetime(df_copy[col]).dt.strftime("%Y-%m-%d")
+        # Convert internal PascalCase columns -> actual lowercase DB columns
+        df_copy = to_db_columns(df_copy)
         try:
             supabase.table(table_name).delete().neq("id", -1).execute()
         except Exception:
@@ -382,6 +412,7 @@ def insert_planned_visit(record: dict):
             else:
                 rec["VisitDate"] = str(v)
         rec = sanitize_record(rec)
+        rec = to_db_record(rec)  # PascalCase -> actual lowercase DB columns
         response = supabase.table("planned_visits").insert(rec).execute()
         if response.data:
             return response.data[0].get("id")
@@ -402,6 +433,7 @@ def insert_gst_row(record: dict):
     try:
         rec = {k: v for k, v in record.items() if k != "id"}
         rec = sanitize_record(rec)
+        rec = to_db_record(rec)  # PascalCase -> actual lowercase DB columns
         response = supabase.table("gst_master").insert(rec).execute()
         if response.data:
             return response.data[0].get("id")
@@ -412,7 +444,8 @@ def insert_gst_row(record: dict):
 
 def delete_gst_row(store_id):
     try:
-        supabase.table("gst_master").delete().eq("StoreID", str(store_id)).execute()
+        # Actual DB column is lowercase "storeid"
+        supabase.table("gst_master").delete().eq(to_db_key("StoreID"), str(store_id)).execute()
         return True
     except Exception as e:
         st.error(f"❌ Store delete failed: {e}")
@@ -422,6 +455,7 @@ def insert_employee_row(record: dict):
     try:
         rec = {k: v for k, v in record.items() if k != "id"}
         rec = sanitize_record(rec)
+        rec = to_db_record(rec)  # PascalCase -> actual lowercase DB columns
         response = supabase.table("employee_master").insert(rec).execute()
         if response.data:
             return response.data[0].get("id")
@@ -432,7 +466,8 @@ def insert_employee_row(record: dict):
 
 def delete_employee_row(emp_code):
     try:
-        supabase.table("employee_master").delete().eq("EmployeeCode", str(emp_code)).execute()
+        # Actual DB column is lowercase "employeecode"
+        supabase.table("employee_master").delete().eq(to_db_key("EmployeeCode"), str(emp_code)).execute()
         return True
     except Exception as e:
         st.error(f"❌ Employee delete failed: {e}")
