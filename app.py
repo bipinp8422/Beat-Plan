@@ -291,10 +291,6 @@ def get_next_month_sundays():
         d += timedelta(days=1)
     return sundays
 
-def is_after_cutoff():
-    """Returns True if today's date is > 23 of current month."""
-    return date.today().day > 23
-
 def is_employee_planning_allowed():
     """Employees can only plan for next month dates."""
     return True  # Always allowed, but dates are restricted to next month
@@ -494,7 +490,7 @@ if "admin_df" not in st.session_state:
 
 for k, v in {
     "logged_in": False, "role": "", "emp_code": "", "emp_name": "",
-    "is_asm": False, "selected_cities": [], "auto_plan_done_month": None
+    "is_asm": False, "selected_cities": []
 }.items():
     if k not in st.session_state:
         st.session_state[k] = v
@@ -738,13 +734,15 @@ def build_beat_plan_pivot(fp_df):
     pivot = pivot[ordered_front + other_cols]
     return pivot
 
-# ====================== AUTO-PLAN PENDING STORES (AFTER 23rd) ======================
+# ====================== AUTO-PLAN PENDING STORES (MANUAL, VIA BUTTON) ======================
 def auto_plan_pending_stores_all_employees(dry_run=False):
     """
     For every employee (and ASM), find all never-planned stores and auto-schedule them
     starting on the FIRST Sunday of next month (the planning month).
     Round-robins across all Sundays so nothing is skipped.
     Returns a summary dict: {emp_code: {"planned": [...], "skipped": [...]}}
+    This only ever runs when the admin explicitly clicks the button below —
+    it is never triggered automatically.
     """
     emp_df  = st.session_state.employee_df
     sundays = get_next_month_sundays()   # sorted list, earliest first
@@ -820,51 +818,6 @@ def auto_plan_pending_stores_all_employees(dry_run=False):
         )
 
     return summary
-
-
-def run_auto_plan_if_needed():
-    """
-    Called once per session after login.
-    If today > 23, auto-plans all pending stores on next month's Sundays.
-    Uses session state flag so it only runs once per session, not on every rerun.
-    Safe to call multiple times — get_pending_stores_for_employee() skips already-planned stores.
-    """
-    if not is_after_cutoff():
-        return   # not yet time
-
-    if st.session_state.get("auto_plan_done_month") == date.today().month:
-        return   # already ran this session for this month
-
-    # Check if there's anything to plan before running
-    emp_df = st.session_state.employee_df
-    if emp_df.empty or "EmployeeCode" not in emp_df.columns:
-        return
-
-    has_pending = any(
-        not get_pending_stores_for_employee(str(erow.get("EmployeeCode", ""))).empty
-        for _, erow in emp_df.iterrows()
-    )
-    if not has_pending:
-        st.session_state.auto_plan_done_month = date.today().month
-        return
-
-    with st.spinner("🤖 Auto-planning pending stores on next month's Sundays…"):
-        result = auto_plan_pending_stores_all_employees(dry_run=False)
-
-    total_planned = sum(len(v.get("planned", [])) for v in result.values() if isinstance(v, dict))
-    total_skipped = sum(len(v.get("skipped", [])) for v in result.values() if isinstance(v, dict))
-
-    if total_planned > 0:
-        first_sunday = get_next_month_sundays()[0] if get_next_month_sundays() else None
-        sun_str = first_sunday.strftime("%d %b %Y") if first_sunday else "next month's Sundays"
-        st.toast(
-            f"🤖 Auto-plan complete: {total_planned} store(s) scheduled starting {sun_str}."
-            + (f" {total_skipped} skipped (slots full)." if total_skipped else ""),
-            icon="✅"
-        )
-
-    # Mark done for this month so we don't re-run every page load
-    st.session_state.auto_plan_done_month = date.today().month
 
 # ====================== NEXT-MONTH DATE INPUT HELPER ======================
 def next_month_date_input(label, key, default_to_first=True):
@@ -950,18 +903,13 @@ if not st.session_state.logged_in:
                             st.error("❌ Invalid credentials.")
     st.stop()
 
-# ====================== AUTO-PLAN TRIGGER (runs once per session after 23rd) ======================
-# Runs for both admin and employee/ASM sessions — safe because get_pending_stores_for_employee
-# only returns truly never-planned stores, so already-planned ones are never duplicated.
-run_auto_plan_if_needed()
-
 # ====================== LOGOUT ======================
 c1, c2, c3 = st.columns([10, 1, 1])
 with c3:
     if st.button("🚪 Logout", use_container_width=True):
         for k, v in {
             "logged_in": False, "role": "", "emp_code": "", "emp_name": "",
-            "is_asm": False, "selected_cities": [], "auto_plan_done_month": None
+            "is_asm": False, "selected_cities": []
         }.items():
             st.session_state[k] = v
         st.rerun()
@@ -973,7 +921,7 @@ if st.session_state.role == "admin":
 
     admin_menu = st.sidebar.radio(
         "Navigation",
-        ["📊 Dashboard", "📋 Beat Plan Status", "👥 Manage Employees", "🏪 Manage Stores", "📋 View Plans", "🤖 Auto-Plan (After 23rd)", "🔄 Refresh Data"],
+        ["📊 Dashboard", "📋 Beat Plan Status", "👥 Manage Employees", "🏪 Manage Stores", "📋 View Plans", "🤖 Auto-Plan Pending Stores", "🔄 Refresh Data"],
     )
 
     # ── DASHBOARD ──
@@ -1007,18 +955,6 @@ if st.session_state.role == "admin":
                         <div class='metric-value'>{val}</div>
                         <div class='metric-sub'>{sub}</div>
                     </div>""", unsafe_allow_html=True)
-
-        # Auto-plan notification banner
-        if is_after_cutoff():
-            first_day, last_day = get_next_month_range()
-            sundays = get_next_month_sundays()
-            sun_strs = ", ".join([s.strftime("%d %b") for s in sundays])
-            st.markdown(f"""
-                <div class='warning-banner'>
-                    🤖 <strong>Auto-Plan Available!</strong> Today is after the 23rd cutoff.
-                    Pending stores can be auto-scheduled on next month's Sundays ({sun_strs}).
-                    Go to <strong>🤖 Auto-Plan (After 23rd)</strong> in the sidebar.
-                </div>""", unsafe_allow_html=True)
 
         st.markdown("---")
         col_done, col_pend = st.columns(2)
@@ -1409,32 +1345,23 @@ if st.session_state.role == "admin":
                     key="pivot_dl_admin",
                 )
 
-    # ── AUTO-PLAN (AFTER 23rd) ──
-    elif admin_menu == "🤖 Auto-Plan (After 23rd)":
+    # ── AUTO-PLAN PENDING STORES (MANUAL, BUTTON-TRIGGERED ONLY) ──
+    elif admin_menu == "🤖 Auto-Plan Pending Stores":
         st.markdown("### 🤖 Auto-Plan Pending Stores")
 
         first_day, last_day = get_next_month_range()
         sundays = get_next_month_sundays()
-        cutoff_passed = is_after_cutoff()
 
         # Info banner
         st.markdown(f"""
             <div class='info-banner'>
-                📅 <strong>How it works:</strong> After the 23rd of each month, all never-planned stores
-                (Employee or ASM) are automatically scheduled on the <strong>Sundays of next month
+                📅 <strong>How it works:</strong> Click the button below to automatically schedule all
+                never-planned stores (Employee or ASM) on the <strong>Sundays of next month
                 ({first_day.strftime('%B %Y')})</strong>.
                 Sundays available: {', '.join([s.strftime('%d %b') for s in sundays]) if sundays else 'None found'}.
-                Stores are distributed evenly across all available Sundays.
+                Stores are distributed evenly across all available Sundays. Nothing runs automatically —
+                this only happens when you click "Run Auto-Plan Now" below.
             </div>""", unsafe_allow_html=True)
-
-        if not cutoff_passed:
-            days_left = 23 - date.today().day
-            st.markdown(f"""
-                <div class='warning-banner'>
-                    🔒 <strong>Not yet available.</strong> Auto-plan unlocks after the 23rd of each month.
-                    <strong>{days_left} day(s)</strong> remaining until cutoff (today is {date.today().strftime('%d %b %Y')}).
-                    <br><br>You can still use the <strong>Preview (Dry Run)</strong> below to see what would be scheduled.
-                </div>""", unsafe_allow_html=True)
 
         # Summary of pending stores
         emp_df = st.session_state.employee_df
@@ -1457,7 +1384,7 @@ if st.session_state.role == "admin":
                     <div class='metric-icon'>📦</div>
                     <div class='metric-label'>Total Pending Stores</div>
                     <div class='metric-value'>{total_pending}</div>
-                    <div class='metric-sub'>To be auto-planned</div>
+                    <div class='metric-sub'>Ready to auto-plan</div>
                 </div>""", unsafe_allow_html=True)
         with c2:
             st.markdown(f"""
@@ -1512,29 +1439,25 @@ if st.session_state.role == "admin":
 
         with col_run:
             st.markdown("#### 🚀 Run Auto-Plan")
-            if cutoff_passed:
-                st.caption(f"✅ Cutoff passed (today is {date.today().strftime('%d %b')}). Ready to auto-plan.")
-                confirm = st.checkbox("✅ I confirm: auto-plan all pending stores on next month's Sundays", key="autoplan_confirm")
-                if st.button("🤖 Run Auto-Plan Now", use_container_width=True, key="autoplan_run", disabled=not confirm):
-                    with st.spinner("🔄 Auto-planning pending stores…"):
-                        result = auto_plan_pending_stores_all_employees(dry_run=False)
-                    if "error" in result:
-                        st.error(result["error"])
-                    else:
-                        total_planned = sum(len(v["planned"]) for v in result.values())
-                        total_skipped = sum(len(v["skipped"]) for v in result.values())
-                        st.success(f"🎉 Done! {total_planned} stores auto-planned across next month's Sundays. {total_skipped} skipped.")
-                        for ec, data in result.items():
-                            if data["planned"] or data["skipped"]:
-                                with st.expander(f"👤 {data['name']} ({ec}) — {len(data['planned'])} planned"):
-                                    for p in data["planned"]:
-                                        st.markdown(f"  ✅ {p}")
-                                    for s in data["skipped"]:
-                                        st.markdown(f"  ⚠️ Skipped: {s}")
-                        st.rerun()
-            else:
-                st.caption(f"🔒 Locked until after the 23rd (today is {date.today().strftime('%d %b')}).")
-                st.button("🔒 Auto-Plan Locked", disabled=True, use_container_width=True)
+            st.caption("Click below any time to auto-plan all pending stores on next month's Sundays.")
+            confirm = st.checkbox("✅ I confirm: auto-plan all pending stores on next month's Sundays", key="autoplan_confirm")
+            if st.button("🤖 Run Auto-Plan Now", use_container_width=True, key="autoplan_run", disabled=not confirm):
+                with st.spinner("🔄 Auto-planning pending stores…"):
+                    result = auto_plan_pending_stores_all_employees(dry_run=False)
+                if "error" in result:
+                    st.error(result["error"])
+                else:
+                    total_planned = sum(len(v["planned"]) for v in result.values())
+                    total_skipped = sum(len(v["skipped"]) for v in result.values())
+                    st.success(f"🎉 Done! {total_planned} stores auto-planned across next month's Sundays. {total_skipped} skipped.")
+                    for ec, data in result.items():
+                        if data["planned"] or data["skipped"]:
+                            with st.expander(f"👤 {data['name']} ({ec}) — {len(data['planned'])} planned"):
+                                for p in data["planned"]:
+                                    st.markdown(f"  ✅ {p}")
+                                for s in data["skipped"]:
+                                    st.markdown(f"  ⚠️ Skipped: {s}")
+                    st.rerun()
 
     # ── REFRESH ──
     elif admin_menu == "🔄 Refresh Data":
