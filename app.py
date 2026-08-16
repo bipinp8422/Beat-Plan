@@ -596,6 +596,27 @@ def download_pending_stores_button(pend_df, key, filename_prefix="Pending_Stores
         key=key,
     )
 
+# ---- NEW: Store Master export (all stores, full details) ----
+def download_store_master_button(df, key, filename_prefix="Store_Master"):
+    """Lets Admin download the full Store Master (GST/store table) as Excel.
+    Includes StoreID, StoreName, GSTNumber, City, EmployeeCode for every store."""
+    if df is None or df.empty:
+        return
+    cols = [c for c in ["StoreID", "StoreName", "GSTNumber", "City", "EmployeeCode"] if c in df.columns]
+    dl_df = df[cols].copy() if cols else df.drop(columns=["id"], errors="ignore").copy()
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        dl_df.to_excel(writer, index=False, sheet_name="Store Master")
+    output.seek(0)
+    st.download_button(
+        label="📥 Download Store Master (Excel)",
+        data=output.getvalue(),
+        file_name=f"{filename_prefix}_{date.today().strftime('%Y-%m-%d')}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        use_container_width=True,
+        key=key,
+    )
+
 def render_pending_marquee(pend_stores):
     if pend_stores is None or pend_stores.empty:
         return
@@ -1240,6 +1261,8 @@ if st.session_state.role == "admin":
         with tab1:
             if not st.session_state.gst_df.empty:
                 st.dataframe(st.session_state.gst_df, use_container_width=True, hide_index=True)
+                # NEW: Admin can export the full Store Master to Excel
+                download_store_master_button(st.session_state.gst_df, "store_master_dl_admin")
             else:
                 st.info("No stores found.")
         with tab2:
