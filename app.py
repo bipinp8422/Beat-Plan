@@ -475,6 +475,15 @@ GST_COLS   = ["StoreID", "StoreName", "GSTNumber", "City", "EmployeeCode"]
 PLAN_COLS  = ["EmployeeCode", "EmployeeName", "City", "Store", "GSTNumber", "StoreID", "VisitDate"]
 ADMIN_COLS = ["Username", "Password"]
 
+# ====================== DAILY VISIT CAP CONSTANTS ======================
+# Business rule: every employee/ASM must plan a MINIMUM of 3 store visits
+# for any date they plan at all, and a MAXIMUM of 10 store visits per date.
+# These are enforced as HARD limits (blocking, not just a warning) across
+# manual planning (New Beat Plan / Pending Stores / Quick Plan) and the
+# Admin "Auto-Plan Pending Stores" distribution.
+MIN_VISITS_PER_DAY = 3
+MAX_VISITS_PER_DAY = 10
+
 # ====================== INITIALIZE ======================
 if not init_db():
     st.stop()
@@ -499,12 +508,39 @@ for k, v in {
 def is_valid_gstin(gstin):
     return bool(re.match(r"^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$", str(gstin).strip().upper()))
 
-def get_progress_color(current, max_val):
+def get_progress_color(current, max_val, min_val=0):
+    """Red if below the required minimum, otherwise the usual traffic-light scale."""
+    if min_val and current < min_val:
+        return "#ef4444"
     pct = (current / max_val) * 100
     return "#ef4444" if pct >= 100 else "#f59e0b" if pct >= 80 else "#10b981"
 
 def safe_col(df, col):
     return df[col] if col in df.columns else pd.Series([""] * len(df))
+
+def get_day_visit_count(emp_code, visit_date):
+    """How many stores this employee/ASM already has planned for a specific date."""
+    plan_df = st.session_state.planned_df
+    if plan_df.empty or "VisitDate" not in plan_df.columns:
+        return 0
+    mask = (
+        (safe_col(plan_df, "EmployeeCode").astype(str) == str(emp_code)) &
+        (plan_df["VisitDate"] == visit_date)
+    )
+    return int(mask.sum())
+
+def is_duplicate_plan(emp_code, store_id, visit_date):
+    """True if this employee/ASM already has THIS store planned for THIS exact date.
+    Enforces: 'a store cannot be planned again for the same date'."""
+    plan_df = st.session_state.planned_df
+    if plan_df.empty or "VisitDate" not in plan_df.columns:
+        return False
+    mask = (
+        (safe_col(plan_df, "EmployeeCode").astype(str) == str(emp_code)) &
+        (safe_col(plan_df, "StoreID").astype(str) == str(store_id)) &
+        (plan_df["VisitDate"] == visit_date)
+    )
+    return bool(mask.any())
 
 def gst_chip_html(row):
     """Returns a GST chip only if a GST number is actually present (ASM stores may have none)."""
@@ -755,12 +791,74 @@ def build_beat_plan_pivot(fp_df):
     pivot = pivot[ordered_front + other_cols]
     return pivot
 
+# ====================== DAY-BUCKET DISTRIBUTION (MIN 3 / MAX 10 PER DAY) ======================
+def distribute_counts_over_days(total, n_days_available):
+    """
+    Splits `total` items across as few days as possible while respecting:
+      - MAX_VISITS_PER_DAY per day (hard cap)
+      - MIN_VISITS_PER_DAY per day (hard minimum) whenever a day is used
+      - never using more days than n_days_available
+
+    Returns (counts, unplannable) where:
+      counts      = list of per-day counts (len <= n_days_available), each
+                    between MIN_VISITS_PER_DAY and MAX_VISITS_PER_DAY (except
+                    the special case below where total itself is < MIN).
+      unplannable = number of items that couldn't be fit into any day at all
+                    because there weren't enough days available to keep every
+                    day within the max cap.
+    """
+    if total <= 0 or n_days_available <= 0:
+        return [], total
+
+    if total < MIN_VISITS_PER_DAY:
+        # Not enough stores to ever satisfy the minimum for a day. We still
+        # place them (on the first day) but flag this case for the caller so
+        # it can be reported — it's an unavoidable shortfall, not a bug.
+        return [total], 0
+
+    # Fewest days needed so no single day exceeds the max cap.
+    days_for_max_cap = -(-total // MAX_VISITS_PER_DAY)  # ceil division
+    days_used = min(max(days_for_max_cap, 1), n_days_available)
+
+    capacity = days_used * MAX_VISITS_PER_DAY
+    plannable = min(total, capacity)
+    unplannable = total - plannable
+
+    base = plannable // days_used
+    remainder = plannable % days_used
+    counts = [base] * days_used
+    for i in range(remainder):
+        counts[i] += 1
+
+    # Safety: if the even split still leaves some day below the minimum
+    # (can happen only in unusual edge cases), collapse onto fewer days.
+    while len(counts) > 1 and min(counts) < MIN_VISITS_PER_DAY:
+        smallest_idx = counts.index(min(counts))
+        smallest_val = counts.pop(smallest_idx)
+        # Redistribute the removed day's stores onto remaining days, capped at MAX.
+        i = 0
+        while smallest_val > 0 and i < len(counts):
+            room = MAX_VISITS_PER_DAY - counts[i]
+            add = min(room, smallest_val)
+            counts[i] += add
+            smallest_val -= add
+            i += 1
+        if smallest_val > 0:
+            # Couldn't fully redistribute — count it as unplannable.
+            unplannable += smallest_val
+
+    return counts, unplannable
+
 # ====================== AUTO-PLAN PENDING STORES (MANUAL, VIA BUTTON) ======================
 def auto_plan_pending_stores_all_employees(dry_run=False):
     """
     For every employee (and ASM), find all never-planned stores and auto-schedule them
     starting on the FIRST Sunday of next month (the planning month).
-    Round-robins across all Sundays so nothing is skipped.
+
+    Distribution honors the same hard caps as manual planning:
+      - MIN_VISITS_PER_DAY (3)  stores minimum on any day that gets used
+      - MAX_VISITS_PER_DAY (10) stores maximum on any single day
+
     Returns a summary dict: {emp_code: {"planned": [...], "skipped": [...]}}
     This only ever runs when the admin explicitly clicks the button below —
     it is never triggered automatically.
@@ -774,8 +872,6 @@ def auto_plan_pending_stores_all_employees(dry_run=False):
     if emp_df.empty or "EmployeeCode" not in emp_df.columns:
         return {"error": "No employees found."}
 
-    plan_df = st.session_state.planned_df.copy()
-
     summary     = {}
     new_records = []
 
@@ -785,47 +881,59 @@ def auto_plan_pending_stores_all_employees(dry_run=False):
         if not ec or ec.lower() == "nan":
             continue
 
-        pending = get_pending_stores_for_employee(ec)
+        pending = get_pending_stores_for_employee(ec).reset_index(drop=True)
         if pending.empty:
             summary[ec] = {"name": en, "planned": [], "skipped": []}
             continue
 
+        counts, unplannable = distribute_counts_over_days(len(pending), len(sundays))
+
         emp_planned = []
         emp_skipped = []
 
-        # Round-robin across all Sundays — NO hard cap per Sunday.
-        # store[0] → Sunday[0], store[1] → Sunday[1], ... wraps back to Sunday[0].
-        # This guarantees every pending store gets a date; nothing is skipped.
-        sunday_list = sundays  # sorted earliest → latest
-        n_sundays   = len(sunday_list)
+        store_idx = 0
+        for day_i, day_count in enumerate(counts):
+            target_sunday = sundays[day_i]
+            below_min_note = " ⚠️ below the 3-store minimum (not enough pending stores left)" if day_count < MIN_VISITS_PER_DAY else ""
+            for _ in range(day_count):
+                store_row = pending.iloc[store_idx]
+                store_idx += 1
 
-        for store_idx, (_, store_row) in enumerate(pending.iterrows()):
-            target_sunday = sunday_list[store_idx % n_sundays]
+                new_record = {
+                    "EmployeeCode": ec,
+                    "EmployeeName": en,
+                    "City":         store_row.get("City", ""),
+                    "Store":        store_row.get("StoreName", ""),
+                    "StoreID":      store_row.get("StoreID", ""),
+                    "GSTNumber":    store_row.get("GSTNumber", ""),
+                    "VisitDate":    target_sunday,
+                }
 
-            new_record = {
-                "EmployeeCode": ec,
-                "EmployeeName": en,
-                "City":         store_row.get("City", ""),
-                "Store":        store_row.get("StoreName", ""),
-                "StoreID":      store_row.get("StoreID", ""),
-                "GSTNumber":    store_row.get("GSTNumber", ""),
-                "VisitDate":    target_sunday,
-            }
-
-            if not dry_run:
-                new_id = insert_planned_visit(new_record)
-                if new_id is not None:
-                    new_record["id"] = new_id
-                    new_records.append(new_record)
-                    emp_planned.append(
-                        f"{store_row.get('StoreName','—')} → {target_sunday.strftime('%d %b %Y')} (Sunday)"
-                    )
+                if not dry_run:
+                    if is_duplicate_plan(ec, new_record["StoreID"], target_sunday):
+                        emp_skipped.append(f"{store_row.get('StoreName','—')} (already planned for this date)")
+                        continue
+                    new_id = insert_planned_visit(new_record)
+                    if new_id is not None:
+                        new_record["id"] = new_id
+                        new_records.append(new_record)
+                        emp_planned.append(
+                            f"{store_row.get('StoreName','—')} → {target_sunday.strftime('%d %b %Y')} (Sunday){below_min_note}"
+                        )
+                    else:
+                        emp_skipped.append(store_row.get("StoreName", "—"))
                 else:
-                    emp_skipped.append(store_row.get("StoreName", "—"))
-            else:
-                emp_planned.append(
-                    f"{store_row.get('StoreName','—')} → {target_sunday.strftime('%d %b %Y')} (Sunday)"
-                )
+                    emp_planned.append(
+                        f"{store_row.get('StoreName','—')} → {target_sunday.strftime('%d %b %Y')} (Sunday){below_min_note}"
+                    )
+
+        # Any stores that couldn't fit within MAX_VISITS_PER_DAY × available Sundays
+        if unplannable > 0:
+            for _ in range(unplannable):
+                if store_idx < len(pending):
+                    store_row = pending.iloc[store_idx]
+                    store_idx += 1
+                    emp_skipped.append(f"{store_row.get('StoreName','—')} (no day slot left within 10/day cap)")
 
         summary[ec] = {"name": en, "planned": emp_planned, "skipped": emp_skipped}
 
@@ -1382,8 +1490,9 @@ if st.session_state.role == "admin":
                 never-planned stores (Employee or ASM) on the <strong>Sundays of next month
                 ({first_day.strftime('%B %Y')})</strong>.
                 Sundays available: {', '.join([s.strftime('%d %b') for s in sundays]) if sundays else 'None found'}.
-                Stores are distributed evenly across all available Sundays. Nothing runs automatically —
-                this only happens when you click "Run Auto-Plan Now" below.
+                Each day used gets a <strong>minimum of {MIN_VISITS_PER_DAY}</strong> and a
+                <strong>maximum of {MAX_VISITS_PER_DAY}</strong> stores — both are hard limits.
+                Nothing runs automatically — this only happens when you click "Run Auto-Plan Now" below.
             </div>""", unsafe_allow_html=True)
 
         # Summary of pending stores
@@ -1418,13 +1527,13 @@ if st.session_state.role == "admin":
                     <div class='metric-sub'>{first_day.strftime('%B %Y')}</div>
                 </div>""", unsafe_allow_html=True)
         with c3:
-            total_slots = len(sundays) * 10
+            total_slots = len(sundays) * MAX_VISITS_PER_DAY
             st.markdown(f"""
                 <div class='metric-card green'>
                     <div class='metric-icon'>🎯</div>
                     <div class='metric-label'>Total Available Slots</div>
                     <div class='metric-value'>{total_slots}</div>
-                    <div class='metric-sub'>10 stores × {len(sundays)} Sundays</div>
+                    <div class='metric-sub'>{MIN_VISITS_PER_DAY}–{MAX_VISITS_PER_DAY} stores × {len(sundays)} Sundays</div>
                 </div>""", unsafe_allow_html=True)
 
         if emp_pending_summary:
@@ -1447,7 +1556,7 @@ if st.session_state.role == "admin":
                 else:
                     total_would_plan = sum(len(v["planned"]) for v in preview_result.values())
                     total_would_skip = sum(len(v["skipped"]) for v in preview_result.values())
-                    st.success(f"✅ Preview: {total_would_plan} stores would be planned, {total_would_skip} skipped (slots full).")
+                    st.success(f"✅ Preview: {total_would_plan} stores would be planned, {total_would_skip} skipped (couldn't fit within the {MIN_VISITS_PER_DAY}-{MAX_VISITS_PER_DAY}/day rule or already planned).")
                     for ec, data in preview_result.items():
                         if data["planned"] or data["skipped"]:
                             with st.expander(f"👤 {data['name']} ({ec}) — {len(data['planned'])} planned, {len(data['skipped'])} skipped"):
@@ -1456,7 +1565,7 @@ if st.session_state.role == "admin":
                                     for p in data["planned"]:
                                         st.markdown(f"  ✅ {p}")
                                 if data["skipped"]:
-                                    st.markdown("**Would be skipped (all Sundays full):**")
+                                    st.markdown("**Would be skipped:**")
                                     for s in data["skipped"]:
                                         st.markdown(f"  ⚠️ {s}")
 
@@ -1515,7 +1624,9 @@ else:
         <div class='info-banner'>
             📅 <strong>Planning is open for next month only:</strong>
             {first_day.strftime('%d %b %Y')} – {last_day.strftime('%d %b %Y')} &nbsp;|&nbsp;
-            🗓️ Sundays: {sun_strs}
+            🗓️ Sundays: {sun_strs} &nbsp;|&nbsp;
+            📌 Every planned date needs <strong>{MIN_VISITS_PER_DAY}–{MAX_VISITS_PER_DAY} stores</strong>,
+            and the same store can't be planned twice for the same date.
         </div>""", unsafe_allow_html=True)
 
     pending_all = get_pending_stores_for_employee(emp_code)
@@ -1544,13 +1655,12 @@ else:
                     st.error("❌ Store not found. Refresh and try again.")
                 else:
                     row = match_row.iloc[0]
-                    day_count = len(st.session_state.planned_df[
-                        (safe_col(st.session_state.planned_df, "EmployeeCode").astype(str) == str(emp_code)) &
-                        (st.session_state.planned_df["VisitDate"] == marquee_plan_date)
-                    ]) if "VisitDate" in st.session_state.planned_df.columns else 0
+                    day_count = get_day_visit_count(emp_code, marquee_plan_date)
 
-                    if day_count >= 10:
-                        st.error(f"🚫 {marquee_plan_date.strftime('%d %b %Y')} already has 10 stores planned. Pick another date.")
+                    if day_count >= MAX_VISITS_PER_DAY:
+                        st.error(f"🚫 {marquee_plan_date.strftime('%d %b %Y')} already has {MAX_VISITS_PER_DAY} stores planned. Pick another date.")
+                    elif is_duplicate_plan(emp_code, sel_sid, marquee_plan_date):
+                        st.error(f"🚫 This store is already planned for {marquee_plan_date.strftime('%d %b %Y')}. A store can't be planned twice on the same date.")
                     else:
                         new_record = {
                             "EmployeeCode": emp_code,
@@ -1569,7 +1679,10 @@ else:
                                 [st.session_state.planned_df, pd.DataFrame([new_record])],
                                 ignore_index=True
                             )
+                            new_count = day_count + 1
                             st.success(f"✅ {row.get('StoreName','')} planned for {marquee_plan_date.strftime('%d %b %Y')}!")
+                            if new_count < MIN_VISITS_PER_DAY:
+                                st.warning(f"⚠️ {marquee_plan_date.strftime('%d %b %Y')} now has {new_count}/{MIN_VISITS_PER_DAY} store(s) — add {MIN_VISITS_PER_DAY - new_count} more to meet the daily minimum.")
                             st.rerun()
 
     employee_stores = st.session_state.gst_df[
@@ -1610,19 +1723,26 @@ else:
         ] if "VisitDate" in st.session_state.planned_df.columns else pd.DataFrame(columns=PLAN_COLS)
 
         pc   = len(daily_plans)
-        pcol = get_progress_color(pc, 10)
+        pcol = get_progress_color(pc, MAX_VISITS_PER_DAY, MIN_VISITS_PER_DAY)
+
+        if pc >= MAX_VISITS_PER_DAY:
+            progress_note = f"🚫 Maximum {MAX_VISITS_PER_DAY} stores reached."
+        elif pc < MIN_VISITS_PER_DAY:
+            progress_note = f"⚠️ Minimum {MIN_VISITS_PER_DAY} required — add {MIN_VISITS_PER_DAY - pc} more store(s) for this date."
+        else:
+            progress_note = f"✅ {MAX_VISITS_PER_DAY - pc} more store(s) can be added for this date."
 
         st.markdown(f"""
             <div class='progress-wrap'>
                 <div style='display:flex;justify-content:space-between;'>
                     <span class='progress-label'>Daily Progress — {visit_date.strftime('%d %b %Y')} ({visit_date.strftime('%A')})</span>
-                    <span style='font-weight:800;color:{pcol};font-size:18px;'>{pc}/10</span>
+                    <span style='font-weight:800;color:{pcol};font-size:18px;'>{pc}/{MAX_VISITS_PER_DAY} <span style='font-size:12px;color:#94a3b8;font-weight:600;'>(min {MIN_VISITS_PER_DAY})</span></span>
                 </div>
                 <div class='progress-track'>
                     <div class='progress-fill' style='width:{min(pc*10,100)}%;background:{pcol};'></div>
                 </div>
                 <div style='font-size:13px;color:#64748b;'>
-                    {"🚫 Maximum 10 stores reached." if pc >= 10 else f"✅ {10-pc} more store(s) can be added for this date."}
+                    {progress_note}
                 </div>
             </div>""", unsafe_allow_html=True)
 
@@ -1647,7 +1767,7 @@ else:
                 show = [c for c in ["Store","City","GSTNumber"] if c in daily_plans.columns]
                 st.dataframe(daily_plans[show], use_container_width=True, hide_index=True)
 
-        if pc < 10:
+        if pc < MAX_VISITS_PER_DAY:
             section_header("🏪", f"Available Stores ({len(available)})")
             if available.empty:
                 st.info("No stores found. Try a different search or city.")
@@ -1667,25 +1787,32 @@ else:
                     with col2:
                         st.markdown("<br><br>", unsafe_allow_html=True)
                         if st.button("➕ Add", key=f"add_{idx}_{visit_date}"):
-                            new_record = {
-                                "EmployeeCode": emp_code,
-                                "EmployeeName": emp_name,
-                                "City":         row.get("City", ""),
-                                "Store":        row.get("StoreName", ""),
-                                "StoreID":      row.get("StoreID", ""),
-                                "GSTNumber":    row.get("GSTNumber", ""),
-                                "VisitDate":    visit_date,
-                            }
-                            new_id = insert_planned_visit(new_record)
-                            if new_id is not None:
-                                new_record["id"] = new_id
-                                new_record["VisitDate"] = visit_date
-                                st.session_state.planned_df = pd.concat(
-                                    [st.session_state.planned_df, pd.DataFrame([new_record])],
-                                    ignore_index=True
-                                )
-                                st.success(f"✅ {row.get('StoreName','')} added!")
-                                st.rerun()
+                            store_id = row.get("StoreID", "")
+                            current_count = get_day_visit_count(emp_code, visit_date)
+                            if current_count >= MAX_VISITS_PER_DAY:
+                                st.error(f"🚫 {visit_date.strftime('%d %b %Y')} already has {MAX_VISITS_PER_DAY} stores planned.")
+                            elif is_duplicate_plan(emp_code, store_id, visit_date):
+                                st.error(f"🚫 {row.get('StoreName','')} is already planned for {visit_date.strftime('%d %b %Y')}. A store can't be planned twice on the same date.")
+                            else:
+                                new_record = {
+                                    "EmployeeCode": emp_code,
+                                    "EmployeeName": emp_name,
+                                    "City":         row.get("City", ""),
+                                    "Store":        row.get("StoreName", ""),
+                                    "StoreID":      store_id,
+                                    "GSTNumber":    row.get("GSTNumber", ""),
+                                    "VisitDate":    visit_date,
+                                }
+                                new_id = insert_planned_visit(new_record)
+                                if new_id is not None:
+                                    new_record["id"] = new_id
+                                    new_record["VisitDate"] = visit_date
+                                    st.session_state.planned_df = pd.concat(
+                                        [st.session_state.planned_df, pd.DataFrame([new_record])],
+                                        ignore_index=True
+                                    )
+                                    st.success(f"✅ {row.get('StoreName','')} added!")
+                                    st.rerun()
 
         st.markdown("---")
         emp_plans = st.session_state.planned_df[
@@ -1737,14 +1864,12 @@ else:
                 )
                 view_df = view_df[mask]
 
-            existing_on_date = st.session_state.planned_df[
-                (safe_col(st.session_state.planned_df, "EmployeeCode").astype(str) == str(emp_code)) &
-                (st.session_state.planned_df["VisitDate"] == plan_for_date)
-            ] if "VisitDate" in st.session_state.planned_df.columns else pd.DataFrame()
-            slots_left = 10 - len(existing_on_date)
+            existing_count = get_day_visit_count(emp_code, plan_for_date)
+            slots_left = MAX_VISITS_PER_DAY - existing_count
 
             section_header("📦", f"Never-Planned Stores ({len(view_df)})")
-            st.caption(f"📅 Adding to **{plan_for_date.strftime('%A, %d %b %Y')}** — {max(slots_left,0)} slot(s) left that day (max 10/day).")
+            min_note = f" ⚠️ Needs {MIN_VISITS_PER_DAY - existing_count} more to hit the daily minimum of {MIN_VISITS_PER_DAY}." if existing_count < MIN_VISITS_PER_DAY else ""
+            st.caption(f"📅 Adding to **{plan_for_date.strftime('%A, %d %b %Y')}** — {max(slots_left,0)} slot(s) left that day (min {MIN_VISITS_PER_DAY}, max {MAX_VISITS_PER_DAY}/day).{min_note}")
 
             for idx, row in view_df.iterrows():
                 col1, col2 = st.columns([5, 1])
@@ -1763,25 +1888,29 @@ else:
                     if slots_left <= 0:
                         st.button("🚫 Full", key=f"plan_pending_{idx}", disabled=True)
                     elif st.button("➕ Plan", key=f"plan_pending_{idx}"):
-                        new_record = {
-                            "EmployeeCode": emp_code,
-                            "EmployeeName": emp_name,
-                            "City":         row.get("City", ""),
-                            "Store":        row.get("StoreName", ""),
-                            "StoreID":      row.get("StoreID", ""),
-                            "GSTNumber":    row.get("GSTNumber", ""),
-                            "VisitDate":    plan_for_date,
-                        }
-                        new_id = insert_planned_visit(new_record)
-                        if new_id is not None:
-                            new_record["id"] = new_id
-                            new_record["VisitDate"] = plan_for_date
-                            st.session_state.planned_df = pd.concat(
-                                [st.session_state.planned_df, pd.DataFrame([new_record])],
-                                ignore_index=True
-                            )
-                            st.success(f"✅ {row.get('StoreName','')} added to {plan_for_date.strftime('%d %b %Y')}!")
-                            st.rerun()
+                        store_id = row.get("StoreID", "")
+                        if is_duplicate_plan(emp_code, store_id, plan_for_date):
+                            st.error(f"🚫 {row.get('StoreName','')} is already planned for {plan_for_date.strftime('%d %b %Y')}.")
+                        else:
+                            new_record = {
+                                "EmployeeCode": emp_code,
+                                "EmployeeName": emp_name,
+                                "City":         row.get("City", ""),
+                                "Store":        row.get("StoreName", ""),
+                                "StoreID":      store_id,
+                                "GSTNumber":    row.get("GSTNumber", ""),
+                                "VisitDate":    plan_for_date,
+                            }
+                            new_id = insert_planned_visit(new_record)
+                            if new_id is not None:
+                                new_record["id"] = new_id
+                                new_record["VisitDate"] = plan_for_date
+                                st.session_state.planned_df = pd.concat(
+                                    [st.session_state.planned_df, pd.DataFrame([new_record])],
+                                    ignore_index=True
+                                )
+                                st.success(f"✅ {row.get('StoreName','')} added to {plan_for_date.strftime('%d %b %Y')}!")
+                                st.rerun()
 
             st.markdown("---")
             download_pending_stores_button(pend_stores, "emp_pend_store_dl", f"Pending_Stores_{emp_code}")
@@ -1821,6 +1950,7 @@ else:
                 filtered = filtered[filtered["VisitDate"] == date_filter]
 
             section_header("📋", f"My Plans ({len(filtered)})")
+            st.caption(f"ℹ️ You can't remove an entry if it would drop a date below the {MIN_VISITS_PER_DAY}-store minimum — clear the whole day instead if you need to start over.")
 
             if filtered.empty:
                 st.info("No plans match the filter.")
@@ -1843,16 +1973,26 @@ else:
                     with col_del:
                         st.markdown("<br>", unsafe_allow_html=True)
                         if st.button("🗑️", key=f"del_plan_{idx}_{i}", help="Remove this entry"):
-                            row_id = row.get("id")
-                            if row_id and str(row_id).lower() not in ("", "nan", "none"):
-                                if delete_planned_visit(row_id):
-                                    st.session_state.planned_df = st.session_state.planned_df.drop(index=idx).reset_index(drop=True)
-                                    st.success("✅ Entry removed.")
-                                    st.rerun()
+                            vd = row.get("VisitDate", "")
+                            current_count = get_day_visit_count(emp_code, vd) if vd != "" else 0
+                            resulting_count = current_count - 1
+                            if 0 < resulting_count < MIN_VISITS_PER_DAY:
+                                st.error(
+                                    f"🚫 Can't remove — {vd_str if hasattr(vd,'strftime') else vd} has {current_count} store(s) planned "
+                                    f"and needs a minimum of {MIN_VISITS_PER_DAY}. Delete all {current_count} entries for this "
+                                    f"date together if you want to clear it, or add more stores first."
+                                )
                             else:
-                                st.session_state.planned_df = st.session_state.planned_df.drop(index=idx).reset_index(drop=True)
-                                st.warning("⚠️ Removed from session. DB row may persist — refresh data to sync.")
-                                st.rerun()
+                                row_id = row.get("id")
+                                if row_id and str(row_id).lower() not in ("", "nan", "none"):
+                                    if delete_planned_visit(row_id):
+                                        st.session_state.planned_df = st.session_state.planned_df.drop(index=idx).reset_index(drop=True)
+                                        st.success("✅ Entry removed.")
+                                        st.rerun()
+                                else:
+                                    st.session_state.planned_df = st.session_state.planned_df.drop(index=idx).reset_index(drop=True)
+                                    st.warning("⚠️ Removed from session. DB row may persist — refresh data to sync.")
+                                    st.rerun()
 
             st.markdown("---")
             download_beat_plan_button(my, "my_dl", f"My_Plans_{emp_code}")
@@ -1873,12 +2013,14 @@ else:
                     plans = upcoming[upcoming["VisitDate"] == vdate]
                     is_sunday = vdate.weekday() == 6
                     label = "🔵 Sunday" if is_sunday else ""
+                    below_min = len(plans) < MIN_VISITS_PER_DAY
+                    min_flag = f" &nbsp;<span style='color:#ef4444;font-size:12px;font-weight:700;'>⚠️ below {MIN_VISITS_PER_DAY}-store minimum</span>" if below_min else ""
                     st.markdown(f"""
                         <div style='background:#f0f9ff;border-left:4px solid #1a56db;
                              padding:12px 16px;border-radius:10px;margin-bottom:8px;'>
                             <strong>📅 {vdate.strftime('%A, %d %B %Y')}</strong>
                             &nbsp;<span style='color:#1a56db;font-size:13px;font-weight:600;'>{label}</span>
-                            &nbsp;— {len(plans)} store(s)
+                            &nbsp;— {len(plans)} store(s){min_flag}
                         </div>""", unsafe_allow_html=True)
                     for _, p in plans.iterrows():
                         st.markdown(f"&nbsp;&nbsp;&nbsp;&nbsp;• **{p.get('Store','—')}** — {p.get('City','—')}")
