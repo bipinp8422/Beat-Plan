@@ -1,2099 +1,481 @@
-import streamlit as st
-import pandas as pd
-from datetime import date, timedelta
+"""
+Denave x Canon CPP - Region-wise Performance Mail Generator
+-----------------------------------------------------------
+Upload one or more "Daily Performance Cockpit" dashboard HTML files
+(e.g. the North file, the South file ...). The app reads the data embedded in
+each file and writes a ready-to-send mail draft for every region found,
+plus a combined "All regions" mail when more than one region is uploaded.
+
+Run:  streamlit run app.py
+"""
+
 import calendar
+import json
 import re
-import io
-from supabase import create_client, Client
+import urllib.parse
+from collections import Counter
+from datetime import date
+from email.message import EmailMessage
 
-# ====================== PAGE CONFIG ======================
-st.set_page_config(
-    page_title="Beat Plan Pro",
-    page_icon="🚀",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
+import streamlit as st
 
-# ====================== SUPABASE CONFIG ======================
-SUPABASE_URL = "https://kueicdruccvbempjvxzn.supabase.co"
-SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imt1ZWljZHJ1Y2N2YmVtcGp2eHpuIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODExMjE0MTcsImV4cCI6MjA5NjY5NzQxN30.aWkQ85Wq-iP2Gp1W1dfoATdRhR0rFcc1H6CGtK_zDE0"
+# --------------------------------------------------------------------------
+# Parsing
+# --------------------------------------------------------------------------
+MARKER = "const ALL_DATA = "
 
-try:
-    supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
-except Exception as e:
-    st.error(f"❌ Failed to connect to Supabase: {e}")
-    st.stop()
 
-# ====================== STYLING ======================
-st.markdown("""
-<style>
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap');
+def load_dashboard(raw: bytes) -> dict:
+    """Extract the ALL_DATA JSON object embedded in a dashboard HTML file."""
+    text = raw.decode("utf-8", errors="ignore")
+    idx = text.find(MARKER)
+    if idx == -1:
+        raise ValueError("This does not look like a Performance Cockpit dashboard (ALL_DATA not found).")
+    data, _ = json.JSONDecoder().raw_decode(text[idx + len(MARKER):])
+    return data
 
-    html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
-    .stApp { background: #f0f4f8; }
 
-    .main-header {
-        font-size: 42px; font-weight: 900; letter-spacing: -1.5px;
-        background: linear-gradient(135deg, #1a56db 0%, #06b6d4 100%);
-        -webkit-background-clip: text; -webkit-text-fill-color: transparent;
-        text-align: center; margin: 10px 0 4px;
-    }
-    .sub-header {
-        text-align: center; color: #64748b; font-size: 14px;
-        font-weight: 600; margin-bottom: 28px; letter-spacing: 0.5px;
-    }
+# --------------------------------------------------------------------------
+# Formatting helpers
+# --------------------------------------------------------------------------
+def money(n: float) -> str:
+    n = float(n)
+    if abs(n) >= 1e7:
+        return f"₹{n / 1e7:.2f} Cr"
+    if abs(n) >= 1e5:
+        return f"₹{n / 1e5:.1f} L"
+    return f"₹{n:,.0f}"
 
-    .metric-card {
-        background: #ffffff; padding: 22px 20px; border-radius: 18px;
-        border: 1.5px solid #e8edf5;
-        box-shadow: 0 2px 12px rgba(0,0,0,0.06);
-        margin-bottom: 16px; position: relative; overflow: hidden;
-    }
-    .metric-card::before {
-        content: ''; position: absolute; top: 0; left: 0;
-        width: 4px; height: 100%; border-radius: 18px 0 0 18px;
-    }
-    .metric-card.blue::before  { background: linear-gradient(180deg, #1a56db, #06b6d4); }
-    .metric-card.green::before { background: linear-gradient(180deg, #10b981, #34d399); }
-    .metric-card.amber::before { background: linear-gradient(180deg, #f59e0b, #fbbf24); }
-    .metric-card.red::before   { background: linear-gradient(180deg, #ef4444, #f87171); }
-    .metric-card.purple::before{ background: linear-gradient(180deg, #8b5cf6, #a78bfa); }
 
-    .metric-icon  { font-size: 28px; margin-bottom: 10px; }
-    .metric-label { color: #94a3b8; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.8px; margin-bottom: 6px; }
-    .metric-value { font-size: 34px; font-weight: 900; color: #0f172a; line-height: 1; }
-    .metric-sub   { font-size: 12px; color: #94a3b8; margin-top: 6px; font-weight: 500; }
+def pct(n: float) -> str:
+    return f"{n:.0f}%"
 
-    .emp-card {
-        background: #ffffff; border-radius: 14px; padding: 16px 18px;
-        margin-bottom: 10px; border: 1.5px solid #e8edf5;
-        box-shadow: 0 1px 6px rgba(0,0,0,0.05);
-        display: flex; align-items: center; gap: 14px;
-    }
-    .emp-avatar {
-        width: 44px; height: 44px; border-radius: 50%;
-        display: flex; align-items: center; justify-content: center;
-        font-weight: 800; font-size: 16px; flex-shrink: 0;
-    }
-    .emp-avatar.done    { background: #d1fae5; color: #065f46; }
-    .emp-avatar.pending { background: #fee2e2; color: #991b1b; }
-    .emp-info           { flex: 1; }
-    .emp-name           { font-weight: 700; color: #1e293b; font-size: 15px; }
-    .emp-code           { font-size: 12px; color: #94a3b8; font-weight: 500; margin-top: 2px; }
-    .emp-badge {
-        padding: 4px 12px; border-radius: 20px; font-size: 12px;
-        font-weight: 700; flex-shrink: 0;
-    }
-    .badge-done    { background: #d1fae5; color: #065f46; }
-    .badge-pending { background: #fee2e2; color: #991b1b; }
-    .emp-count { font-size: 13px; color: #64748b; font-weight: 600; margin-top: 3px; }
 
-    .role-chip {
-        display: inline-block; padding: 2px 10px; border-radius: 20px;
-        font-size: 11px; font-weight: 700; margin-left: 6px;
-    }
-    .role-chip.asm  { background: #ede9fe; color: #5b21b6; }
-    .role-chip.emp  { background: #e0f2fe; color: #075985; }
+def join_list(items):
+    items = list(items)
+    if len(items) <= 1:
+        return "".join(items)
+    return ", ".join(items[:-1]) + " and " + items[-1]
 
-    .section-head {
-        font-size: 15px; font-weight: 800; color: #1e293b; margin: 20px 0 12px;
-        display: flex; align-items: center; gap: 8px;
-    }
-    .section-line { flex: 1; height: 1px; background: #e2e8f0; }
 
-    .store-card {
-        background: #ffffff; padding: 16px 20px; border-radius: 14px;
-        border: 1.5px solid #e8edf5; box-shadow: 0 1px 6px rgba(0,0,0,0.05);
-        margin-bottom: 10px;
-    }
-    .store-name  { font-weight: 700; font-size: 16px; color: #1e293b; margin-bottom: 6px; }
-    .store-meta  { font-size: 13px; color: #64748b; line-height: 1.8; }
-    .store-chip  {
-        display: inline-block; padding: 2px 10px; border-radius: 20px;
-        background: #eff6ff; color: #1a56db; font-size: 12px; font-weight: 600;
-        margin-right: 8px;
+# --------------------------------------------------------------------------
+# Summary builder (one region)
+# --------------------------------------------------------------------------
+def weekday_stats(daily):
+    """Average revenue per calendar day for each weekday (Sunday excluded from ranking)."""
+    if not daily:
+        return None
+    dates = [date.fromisoformat(d["DateStr"]) for d in daily]
+    y, m = dates[0].year, dates[0].month
+    n_days = calendar.monthrange(y, m)[1]
+    occurrences = Counter(date(y, m, d).weekday() for d in range(1, n_days + 1))
+    revenue = Counter()
+    for d, dt in zip(daily, dates):
+        revenue[dt.weekday()] += d["Revenue"]
+    avg = {w: revenue[w] / occurrences[w] for w in occurrences if w != 6 and occurrences[w]}
+    if len(avg) < 2:
+        return None
+    soft = min(avg, key=avg.get)
+    best = max(avg, key=avg.get)
+    return {
+        "soft_name": calendar.day_name[soft],
+        "soft_avg": avg[soft],
+        "best_name": calendar.day_name[best],
+        "best_avg": avg[best],
+        "gap_pct": (avg[best] - avg[soft]) / avg[best] * 100 if avg[best] else 0,
     }
 
-    .progress-wrap {
-        background: #ffffff; border-radius: 16px; padding: 20px 22px;
-        border: 1.5px solid #e8edf5; box-shadow: 0 1px 6px rgba(0,0,0,0.05);
-        margin-bottom: 20px;
+
+def build_summary(d: dict, region: str) -> dict:
+    rd = d.get("perRegion", {}).get(region, d)
+    kpi = rd["kpi"]
+    reg_row = next((r for r in rd.get("region", []) if r["Region"] == region), None)
+    target = reg_row["Target"] if reg_row else kpi["totalTarget"]
+    achieved = reg_row["Achieved"] if reg_row else kpi["totalAchieved"]
+    reps_n = reg_row["Reps"] if reg_row else kpi["totalReps"]
+    days = kpi.get("daysInMonth") or 30
+
+    reps = [r for r in d.get("counterReps", []) if r["Region"] == region]
+    reps_sorted = sorted(reps, key=lambda r: r["AchPct"], reverse=True)
+    below = sorted([r for r in reps if r["AchPct"] < 100], key=lambda r: r["AchPct"])
+    above_n = sum(1 for r in reps if r["AchPct"] >= 100) if reps else kpi["repsAbove100"]
+
+    daily = rd.get("daily", [])
+    top_days = sorted(daily, key=lambda x: x["Revenue"], reverse=True)[:3]
+
+    cats = [c for c in rd.get("category", []) if c["Revenue"] > 0]
+    cats = sorted(cats, key=lambda c: c["Revenue"], reverse=True)
+
+    ab = rd.get("alphaBooster", {})
+    ab_kpi = ab.get("kpi", {})
+    prog = {p["Program"]: p for p in ab.get("programSummary", [])}
+    type_rev = {t["Type"]: t["Revenue"] for t in ab.get("typeSummary", [])}
+    prog_by_type = Counter()
+    for c in ab.get("combo", []):
+        prog_by_type[c["Type"]] += c["Revenue"]
+    weak_type = None
+    if type_rev and prog_by_type:
+        shares = {t: prog_by_type[t] / type_rev[t] for t in type_rev if type_rev[t] > 0}
+        if len(shares) > 1:
+            weak_type = min(shares, key=shares.get)
+
+    cov = [c for c in d.get("counterCoverage", []) if c["Region"] == region]
+    partners = sum(c["PartnerCount"] for c in cov)
+    reported = sum(c["PartnersReported"] for c in cov)
+    untapped = sorted(cov, key=lambda c: c["PartnerCount"] - c["PartnersReported"], reverse=True)[:4]
+
+    return {
+        "region": region,
+        "period": d.get("periodLabel", ""),
+        "target": target,
+        "achieved": achieved,
+        "ach_pct": achieved / target * 100 if target else 0,
+        "reps_n": reps_n,
+        "above_n": above_n,
+        "units": kpi.get("totalUnits", 0),
+        "run_rate": achieved / days,
+        "target_rate": target / days,
+        "top_days": top_days,
+        "cats": cats,
+        "total_rev": sum(c["Revenue"] for c in cats) or achieved,
+        "type_rev": type_rev,
+        "ab_rev": ab_kpi.get("totalRevenue", 0),
+        "ab_pct": ab_kpi.get("pctOfRevenue", 0),
+        "xf": prog.get("X-Factor"),
+        "alpha": prog.get("Alpha"),
+        "weak_type": weak_type,
+        "tiers": rd.get("tier", []),
+        "top_reps": reps_sorted[:5],
+        "below": below,
+        "partners": partners,
+        "reported": reported,
+        "untapped": untapped,
+        "weekday": weekday_stats(daily),
     }
-    .progress-label { font-weight: 700; color: #1e293b; font-size: 15px; }
-    .progress-track { height: 10px; background: #f1f5f9; border-radius: 10px; margin: 10px 0 6px; overflow: hidden; }
-    .progress-fill  { height: 100%; border-radius: 10px; transition: width .4s ease; }
 
-    .info-banner {
-        background: linear-gradient(135deg, #eff6ff, #e0f2fe);
-        border: 1.5px solid #bfdbfe; border-radius: 12px;
-        padding: 14px 18px; margin-bottom: 16px;
-        font-size: 14px; color: #1e40af; font-weight: 600;
-    }
-    .warning-banner {
-        background: linear-gradient(135deg, #fff7ed, #fef2f2);
-        border: 1.5px solid #fed7aa; border-radius: 12px;
-        padding: 14px 18px; margin-bottom: 16px;
-        font-size: 14px; color: #9a3412; font-weight: 600;
-    }
 
-    .stButton > button {
-        border-radius: 10px !important; height: 44px !important;
-        font-weight: 700 !important; font-size: 14px !important;
-        background: linear-gradient(135deg, #1a56db, #06b6d4) !important;
-        color: white !important; border: none !important;
-        box-shadow: 0 2px 8px rgba(26,86,219,0.3) !important;
-        transition: transform .1s ease !important;
-    }
-    .stButton > button:hover { transform: translateY(-1px) !important; }
-    .stButton > button[kind="secondary"] {
-        background: #fff !important; color: #ef4444 !important;
-        border: 1.5px solid #fecaca !important; box-shadow: none !important;
-    }
+# --------------------------------------------------------------------------
+# Mail writers
+# --------------------------------------------------------------------------
+def signature(cfg):
+    lines = ["Warm regards," if cfg["audience"] == "Client / leadership" else "Regards,", cfg["sender"] or "[Your Name]"]
+    desig = f"{cfg['designation']} | {cfg['company']}" if cfg["designation"] else cfg["company"]
+    lines.append(desig)
+    contact = " | ".join(x for x in [cfg["phone"], cfg["email"]] if x)
+    if contact:
+        lines.append(contact)
+    return "\n".join(lines)
 
-    [data-testid="stSidebar"] {
-        background: linear-gradient(180deg, #0f172a 0%, #1e293b 100%) !important;
-    }
-    [data-testid="stSidebar"] * { color: #e2e8f0 !important; }
-    [data-testid="stSidebar"] .stRadio label { font-weight: 600 !important; }
 
-    .stTextInput > div > div > input {
-        border-radius: 10px !important; border: 1.5px solid #e2e8f0 !important;
-        font-size: 14px !important;
-    }
+def below_text(s, with_names):
+    items = []
+    for r in s["below"][:5]:
+        label = f"{r['Name']} ({r['City']})" if with_names else r["City"]
+        items.append(f"{label} {pct(r['AchPct'])}")
+    return ", ".join(items)
 
-    [data-testid="stDataFrame"] { border-radius: 12px; overflow: hidden; }
 
-    .stTabs [data-baseweb="tab"] { font-weight: 600; }
-    .stTabs [data-baseweb="tab-highlight"] { background: #1a56db; }
+def weekday_line(s, internal):
+    w = s["weekday"]
+    if not w or w["gap_pct"] < 5:
+        return None
+    if internal:
+        return (f"Keep momentum steady through the month and lift {w['soft_name']}s "
+                f"(~{money(w['soft_avg'])}/day average, our softest working day) "
+                f"closer to {w['best_name']} levels (~{money(w['best_avg'])}/day).")
+    return (f"{w['soft_name']} was our softest working day at ~{money(w['soft_avg'])}/day on average, "
+            f"versus ~{money(w['best_avg'])}/day on {w['best_name']}s – there is room for a more even run-rate across the week.")
 
-    .del-row {
-        background: #fff5f5; border: 1.5px solid #fecaca;
-        border-radius: 12px; padding: 14px 18px; margin-bottom: 8px;
-        display: flex; align-items: center; gap: 12px;
-    }
-    .del-info { flex: 1; font-size: 14px; color: #1e293b; }
-    .del-date { font-size: 12px; color: #94a3b8; margin-top: 3px; }
 
-    .marquee-wrap {
-        background: linear-gradient(135deg, #fff7ed, #fef2f2);
-        border: 1.5px solid #fed7aa; border-radius: 12px;
-        padding: 10px 0; margin-bottom: 18px; overflow: hidden;
-        display: flex; align-items: center; white-space: nowrap;
-    }
-    .marquee-tag {
-        flex-shrink: 0; background: #f59e0b; color: #fff; font-weight: 800;
-        font-size: 12px; padding: 6px 14px; border-radius: 8px;
-        margin: 0 12px; letter-spacing: 0.5px;
-    }
-    .marquee-track { flex: 1; overflow: hidden; position: relative; }
-    .marquee-content {
-        display: inline-block; white-space: nowrap;
-        animation: marquee-scroll 140s linear infinite;
-        font-size: 14px; font-weight: 600; color: #9a3412;
-    }
-    .marquee-content span { margin-right: 50px; }
-    .marquee-wrap:hover .marquee-content { animation-play-state: paused; }
-    @keyframes marquee-scroll {
-        0%   { transform: translateX(0%); }
-        100% { transform: translateX(-50%); }
-    }
-</style>
-""", unsafe_allow_html=True)
+def short(cfg):
+    """Company name without a trailing 'India' for subject lines."""
+    return re.sub(r"\s+India$", "", cfg["company"]).strip() or cfg["company"]
 
-# ====================== COLUMN NAME NORMALIZER ======================
-# NOTE: Your actual Supabase tables use lowercase column names
-# (e.g. storeid, storename, gstnumber, city, employeecode, visitdate, ...).
-# Internally, this app works with "pretty" PascalCase names
-# (StoreID, StoreName, GSTNumber, City, ...) for readability.
-# normalize_columns() converts DB (lowercase) -> App (PascalCase) on READ.
-# to_db_record() / to_db_columns() convert App (PascalCase) -> DB (lowercase) on WRITE.
-COLUMN_MAP = {
-    "EmployeeCode": ["employeecode", "employee_code"],
-    "EmployeeName": ["employeename", "employee_name"],
-    "Password":     ["password"],
-    "Role":         ["role", "user_role", "userrole"],
-    "StoreID":      ["storeid", "store_id"],
-    "StoreName":    ["storename", "store_name"],
-    "GSTNumber":    ["gstnumber", "gst_number"],
-    "City":         ["city"],
-    "Store":        ["store"],
-    "VisitDate":    ["visitdate", "visit_date"],
-    "Username":     ["username"],
-}
 
-# Reverse map: App-facing PascalCase key -> actual lowercase DB column name.
-# Falls back to a plain .lower() of the key for anything not explicitly listed,
-# which safely covers "id" and any future/unknown columns.
-PASCAL_TO_DB = {expected: variants[0] for expected, variants in COLUMN_MAP.items()}
-
-def normalize_columns(df):
-    rename = {}
-    lower_map = {c.lower().replace("_", ""): c for c in df.columns}
-    for expected, variants in COLUMN_MAP.items():
-        if expected in df.columns:
-            continue
-        for v in variants:
-            key = v.lower().replace("_", "")
-            if key in lower_map:
-                rename[lower_map[key]] = expected
-                break
-    return df.rename(columns=rename) if rename else df
-
-def to_db_key(key):
-    """Converts an internal PascalCase key (e.g. 'StoreID') to the actual
-    lowercase Supabase column name (e.g. 'storeid')."""
-    if key in PASCAL_TO_DB:
-        return PASCAL_TO_DB[key]
-    return str(key).lower()
-
-def to_db_record(record: dict) -> dict:
-    """Converts an entire record's keys from internal PascalCase to the
-    actual lowercase DB column names before sending to Supabase."""
-    return {to_db_key(k): v for k, v in record.items()}
-
-def to_db_columns(df: pd.DataFrame) -> pd.DataFrame:
-    """Renames a DataFrame's columns from internal PascalCase to actual
-    lowercase DB column names before bulk insert."""
-    return df.rename(columns={c: to_db_key(c) for c in df.columns})
-
-_HTML_TAG_RE = re.compile(r"<[^>]*>")
-
-def strip_html_tags(value):
-    """Removes any stray HTML tags (e.g. accidentally pasted '</div>') from a value
-    so they never leak into the app's unsafe_allow_html-rendered cards."""
-    if value is None:
-        return value
-    s = str(value)
-    if "<" in s and ">" in s:
-        s = _HTML_TAG_RE.sub("", s)
-    return s
-
-# ====================== DATE HELPERS ======================
-def get_next_month_range():
-    """Returns (first_day, last_day) of next month."""
-    today = date.today()
-    if today.month == 12:
-        nm_year, nm_month = today.year + 1, 1
+def subject_for(s, cfg):
+    if s["ach_pct"] >= 100:
+        tail = f"{pct(s['ach_pct'])} Target Achievement"
     else:
-        nm_year, nm_month = today.year, today.month + 1
-    first_day = date(nm_year, nm_month, 1)
-    last_day  = date(nm_year, nm_month, calendar.monthrange(nm_year, nm_month)[1])
-    return first_day, last_day
+        tail = f"{pct(s['ach_pct'])} of Target Achieved"
+    if cfg["audience"] == "Client / leadership":
+        return f"{short(cfg)} × {cfg['program']} | {s['region']} Region – {s['period']} Performance: {tail}"
+    return f"{s['period']} Results: {s['region']} at {pct(s['ach_pct'])} of Target – Thank You & Next-Month Focus"
 
-def get_next_month_sundays():
-    """Returns a sorted list of all Sunday dates in next month."""
-    first_day, last_day = get_next_month_range()
-    sundays = []
-    d = first_day
-    while d <= last_day:
-        if d.weekday() == 6:  # Sunday
-            sundays.append(d)
-        d += timedelta(days=1)
-    return sundays
 
-def is_employee_planning_allowed():
-    """Employees can only plan for next month dates."""
-    return True  # Always allowed, but dates are restricted to next month
+def client_mail(s, cfg):
+    ahead = s["achieved"] >= s["target"]
+    gap = abs(s["achieved"] - s["target"])
+    L = [f"Dear {cfg['recipient'] or '[Name]'},", ""]
+    L.append(f"I'm pleased to share the {s['period']} performance update for the {cfg['program']} program "
+             f"({s['region']} region), along with the attached Daily Performance Cockpit for a detailed drill-down.")
+    L += ["", "HEADLINE",
+          f"• Target: {money(s['target'])} | Achieved: {money(s['achieved'])} | Attainment: {pct(s['ach_pct'])}",
+          f"• {'Ahead of' if ahead else 'Short of'} target by {money(gap)}",
+          f"• {s['above_n']} of {s['reps_n']} field reps crossed 100% of their target",
+          f"• {s['units']:,} units sold; average run-rate of ~{money(s['run_rate'])}/day against "
+          f"~{money(s['target_rate'])}/day needed to meet target"]
+    if s["top_days"]:
+        days = ", ".join(f"{date.fromisoformat(x['DateStr']).day} {calendar.month_abbr[date.fromisoformat(x['DateStr']).month]} ({money(x['Revenue'])})"
+                         for x in s["top_days"])
+        L.append(f"• Strongest days: {days}")
 
-# ====================== DATABASE FUNCTIONS ======================
-def init_db():
-    try:
-        supabase.table("planned_visits").select("*").limit(1).execute()
-        return True
-    except Exception as e:
-        st.error(f"❌ Supabase connection failed: {e}")
-        return False
+    L += ["", "WHAT DROVE THE RESULT"]
+    if s["cats"]:
+        top = s["cats"][0]
+        rest = join_list(f"{c['Product Category']} ({money(c['Revenue'])})" for c in s["cats"][1:3])
+        line = (f"• Product mix: {top['Product Category']} led with {money(top['Revenue'])} "
+                f"(~{top['Revenue'] / s['total_rev'] * 100:.0f}% of revenue)")
+        if rest:
+            line += f", followed by {rest}"
+        L.append(line + ".")
+    if s["type_rev"]:
+        L.append("• " + " and ".join(f"{k} contributed {money(v)}" for k, v in s["type_rev"].items()) + ".")
+    if s["ab_rev"]:
+        parts = []
+        if s["xf"]:
+            parts.append(f"X-Factor {money(s['xf']['Revenue'])} ({s['xf']['Units']:,} units)")
+        if s["alpha"]:
+            parts.append(f"Alpha {money(s['alpha']['Revenue'])} ({s['alpha']['Units']:,} units)")
+        L.append(f"• Alpha / X-Factor programs: {money(s['ab_rev'])} (~{s['ab_pct']:.0f}% of total revenue)"
+                 + (" – " + " and ".join(parts) if parts else "") + ".")
+    if s["tiers"]:
+        L.append("• Tier performance: " + ", ".join(f"{t['Tier']} {pct(t['AchPct'])}" for t in s["tiers"]) + " of target.")
+    if s["top_reps"]:
+        L.append("• Top performers: " + join_list(f"{r['Name']} ({r['City']}, {pct(r['AchPct'])})" for r in s["top_reps"][:3]) + ".")
 
-def clean_dataframe(df, expected_columns):
-    if df.empty:
-        return df
-    df = normalize_columns(df)
-    for col in expected_columns:
-        if col not in df.columns:
-            df[col] = ""
-    # Replace any NaN/None across ALL columns with "" BEFORE string conversion,
-    # so blank GST numbers (common for ASM stores) never end up as float NaN
-    # (float NaN breaks JSON serialization on Supabase inserts).
-    date_cols = {"VisitDate"}
-    for col in df.columns:
-        if col in date_cols:
-            continue
-        df[col] = df[col].where(df[col].notna(), "")
-        df[col] = df[col].astype(str).str.strip()
-        df[col] = df[col].replace({"nan": "", "None": "", "NaN": ""})
-        df[col] = df[col].apply(strip_html_tags)
-    if "VisitDate" in df.columns:
-        df["VisitDate"] = pd.to_datetime(df["VisitDate"], errors="coerce").dt.date
-    if "Role" in df.columns:
-        df["Role"] = df["Role"].astype(str).str.strip()
-        df.loc[~df["Role"].isin(["Employee", "ASM"]), "Role"] = "Employee"
-    return df
+    L += ["", f"AREAS OF FOCUS FOR {cfg['next_month'].upper()}"]
+    if s["below"]:
+        L.append(f"• {len(s['below'])} rep{'s' if len(s['below']) > 1 else ''} remain below target "
+                 f"({below_text(s, False)}) – we have started targeted coaching and joint-working plans with the respective Branch Managers.")
+    if s["partners"]:
+        cities = join_list(c["City"] for c in s["untapped"])
+        L.append(f"• Counter coverage: {s['reported']:,} of {s['partners']:,} TPS partners reported sales "
+                 f"(~{s['reported'] / s['partners'] * 100:.0f}%), leaving a significant untapped base. "
+                 f"We will prioritise reactivation of non-reporting counters, especially in {cities}.")
+    wl = weekday_line(s, internal=False)
+    if wl:
+        L.append("• " + wl)
+    if s["ab_rev"]:
+        extra = f", particularly in {s['weak_type']}" if s["weak_type"] else ""
+        L.append(f"• Scale Alpha / X-Factor tagging further{extra}.")
 
-def load_from_supabase(table_name, columns, keep_id=False):
-    try:
-        all_rows = []
-        batch_size = 1000
-        offset = 0
-        while True:
-            response = supabase.table(table_name).select("*").range(offset, offset + batch_size - 1).execute()
-            if not response.data:
-                break
-            all_rows.extend(response.data)
-            if len(response.data) < batch_size:
-                break
-            offset += batch_size
-        if all_rows:
-            df = pd.DataFrame(all_rows)
-            df = clean_dataframe(df, columns)
-            if keep_id and "id" in df.columns:
-                pass
-            elif not keep_id and "id" in df.columns:
-                df = df.drop(columns=["id"])
-            return df
-        return pd.DataFrame(columns=columns)
-    except Exception as e:
-        st.warning(f"⚠️ Error loading `{table_name}`: {e}")
-        return pd.DataFrame(columns=columns)
+    L += ["", f"We would value 30 minutes to walk you through the dashboard and align on the {cfg['next_month']} plan "
+              "and any support needed from the Canon side.", "", "Thank you for your continued partnership.", "",
+          signature(cfg), "",
+          f"Attachment: {short(cfg)} × {cfg['program']} – Daily Performance Cockpit ({s['period']}, {s['region']})"]
+    return "\n".join(L)
 
-def save_master_to_supabase(table_name, df):
-    try:
-        df_copy = df.copy()
-        if "id" in df_copy.columns:
-            df_copy = df_copy.drop("id", axis=1)
-        for col in df_copy.columns:
-            if col == "VisitDate" or pd.api.types.is_datetime64_any_dtype(df_copy[col]):
-                df_copy[col] = pd.to_datetime(df_copy[col]).dt.strftime("%Y-%m-%d")
-        # Convert internal PascalCase columns -> actual lowercase DB columns
-        df_copy = to_db_columns(df_copy)
+
+def internal_mail(s, cfg):
+    L = ["Hi Team,", ""]
+    if s["ach_pct"] >= 100:
+        L.append(f"Great work, {s['region']}! We closed {s['period']} at {money(s['achieved'])} against a target of "
+                 f"{money(s['target'])} – {pct(s['ach_pct'])} attainment, with {s['above_n']} of {s['reps_n']} reps above 100%. "
+                 "This is a team result, and I want to thank every rep, Branch Manager and State Head behind it.")
+    else:
+        L.append(f"Thank you, {s['region']}, for the effort this month. We closed {s['period']} at {money(s['achieved'])} against a "
+                 f"target of {money(s['target'])} – {pct(s['ach_pct'])} attainment, with {s['above_n']} of {s['reps_n']} reps above 100%. "
+                 f"We are {money(s['target'] - s['achieved'])} short of target, and I want us to close that gap together next month.")
+    if s["top_reps"]:
+        L += ["", "SHOUT-OUTS"]
+        for r in s["top_reps"]:
+            L.append(f"• {r['Name']} ({r['City']}) – {pct(r['AchPct'])} | {money(r['RevenueAchieved'])}")
+    L += ["", "HIGHLIGHTS", f"• {s['units']:,} units sold"]
+    if s["top_days"]:
+        b = s["top_days"][0]
+        dt = date.fromisoformat(b["DateStr"])
+        L[-1] += f"; best day was {dt.day} {calendar.month_abbr[dt.month]} at {money(b['Revenue'])}"
+    if s["ab_rev"]:
+        L.append(f"• Alpha / X-Factor contributed {money(s['ab_rev'])} (~{s['ab_pct']:.0f}% of revenue)")
+    if s["tiers"]:
+        best = max(s["tiers"], key=lambda t: t["AchPct"])
+        L.append(f"• {best['Tier']} locations delivered the best attainment at {pct(best['AchPct'])}")
+
+    L += ["", "WHERE WE CAN DO BETTER"]
+    if s["below"]:
+        L.append("• A few reps are still below target: " + below_text(s, True).replace("(", "– ").replace(")", "")
+                 + ". BMs, please schedule a 1:1 and joint market visit this week.")
+    if s["partners"]:
+        L.append(f"• Only ~{s['reported'] / s['partners'] * 100:.0f}% of TPS partners ({s['reported']:,} of {s['partners']:,}) reported sales. "
+                 "Let's push counter reactivation and new-counter onboarding.")
+    wl = weekday_line(s, internal=True)
+    if wl:
+        L.append("• " + wl)
+
+    L += ["", "NEXT STEPS"]
+    n = 1
+    if s["below"]:
+        L.append(f"{n}. BMs to share a recovery plan for reps below 100% by {cfg['deadline'] or '[date]'}.")
+        n += 1
+    L.append(f"{n}. Each rep to list 10 non-reporting counters to activate in the first week of {cfg['next_month']}.")
+    n += 1
+    L.append(f"{n}. Review call on {cfg['review_call'] or '[date/time]'} using the attached dashboard.")
+    L += ["", "The dashboard is attached – please check your own numbers by city and model.", "",
+          f"Let's make {cfg['next_month']} even bigger!", "", signature(cfg)]
+    return "\n".join(L)
+
+
+def combined_mail(summaries, cfg):
+    period = summaries[0]["period"]
+    target = sum(s["target"] for s in summaries)
+    achieved = sum(s["achieved"] for s in summaries)
+    reps_n = sum(s["reps_n"] for s in summaries)
+    above = sum(s["above_n"] for s in summaries)
+    units = sum(s["units"] for s in summaries)
+    ach = achieved / target * 100 if target else 0
+    ranked = sorted(summaries, key=lambda s: s["ach_pct"], reverse=True)
+    all_top = sorted([r for s in summaries for r in s["top_reps"]], key=lambda r: r["AchPct"], reverse=True)[:5]
+    all_below = sorted([r for s in summaries for r in s["below"]], key=lambda r: r["AchPct"])[:6]
+    partners = sum(s["partners"] for s in summaries)
+    reported = sum(s["reported"] for s in summaries)
+    client = cfg["audience"] == "Client / leadership"
+
+    L = [f"Dear {cfg['recipient'] or '[Name]'}," if client else "Hi Team,", ""]
+    L.append(f"Please find below the consolidated {period} performance update for the {cfg['program']} program across "
+             f"{join_list(s['region'] for s in summaries)}. The detailed regional dashboards are attached.")
+    L += ["", "OVERALL",
+          f"• Target: {money(target)} | Achieved: {money(achieved)} | Attainment: {pct(ach)}",
+          f"• {above} of {reps_n} field reps crossed 100% of their target",
+          f"• {units:,} units sold"]
+    L += ["", "REGION SNAPSHOT"]
+    for s in ranked:
+        L.append(f"• {s['region']}: {money(s['achieved'])} vs {money(s['target'])} target – {pct(s['ach_pct'])} "
+                 f"({s['above_n']}/{s['reps_n']} reps above 100%)")
+    if all_top:
+        L += ["", "TOP PERFORMERS"]
+        for r in all_top:
+            L.append(f"• {r['Name']} ({r['City']}, {r['Region']}) – {pct(r['AchPct'])} | {money(r['RevenueAchieved'])}")
+    L += ["", f"AREAS OF FOCUS FOR {cfg['next_month'].upper()}"]
+    if all_below:
+        L.append("• Reps below target: " + ", ".join(f"{r['Name'] if not client else r['City']} ({r['Region']}) {pct(r['AchPct'])}" for r in all_below)
+                 + (" – coaching and joint-working plans are being put in place with the Branch Managers." if client
+                    else ". BMs, please schedule 1:1s and joint market visits this week."))
+    if partners:
+        L.append(f"• Counter coverage: {reported:,} of {partners:,} TPS partners reported sales (~{reported / partners * 100:.0f}%); "
+                 "reactivation of non-reporting counters is the biggest lever.")
+    for s in ranked:
+        if s["ach_pct"] < 100:
+            L.append(f"• {s['region']} is {money(s['target'] - s['achieved'])} short of target and will get extra review attention.")
+    L += ["", "We would value 30 minutes to walk through the dashboards and align on the next-month plan." if client
+          else f"Let's keep the momentum going into {cfg['next_month']}.", "", signature(cfg)]
+    return "\n".join(L)
+
+
+def build_mail(s, cfg):
+    return client_mail(s, cfg) if cfg["audience"] == "Client / leadership" else internal_mail(s, cfg)
+
+
+# --------------------------------------------------------------------------
+# Output helpers
+# --------------------------------------------------------------------------
+def make_eml(subject, body):
+    msg = EmailMessage()
+    msg["Subject"] = subject
+    msg["X-Unsent"] = "1"  # opens as an editable draft in Outlook
+    msg.set_content(body)
+    return msg.as_bytes()
+
+
+def render_mail_block(key, subject, body):
+    subj = st.text_input("Subject", subject, key=f"subj_{key}")
+    text = st.text_area("Mail body (editable)", body, height=520, key=f"body_{key}")
+    c1, c2, c3 = st.columns(3)
+    safe = re.sub(r"[^A-Za-z0-9_-]+", "_", key)
+    c1.download_button("⬇️ Download .eml (opens in Outlook)", make_eml(subj, text), f"{safe}.eml", "message/rfc822", use_container_width=True)
+    c2.download_button("⬇️ Download .txt", f"Subject: {subj}\n\n{text}", f"{safe}.txt", use_container_width=True)
+    mailto = "mailto:?subject=" + urllib.parse.quote(subj) + "&body=" + urllib.parse.quote(text)
+    if len(mailto) < 1900:
+        c3.link_button("✉️ Open in mail app", mailto, use_container_width=True)
+    else:
+        c3.caption("Mail is too long for a mailto link – use the .eml download.")
+    with st.expander("Copy-friendly view"):
+        st.code(f"Subject: {subj}\n\n{text}", language=None, wrap_lines=True)
+
+
+def kpi_row(s):
+    a, b, c, d_ = st.columns(4)
+    a.metric("Target", money(s["target"]))
+    b.metric("Achieved", money(s["achieved"]))
+    c.metric("Attainment", pct(s["ach_pct"]))
+    d_.metric("Reps ≥ 100%", f"{s['above_n']} / {s['reps_n']}")
+
+
+# --------------------------------------------------------------------------
+# UI
+# --------------------------------------------------------------------------
+def main():
+    st.set_page_config(page_title="Region Mail Generator", page_icon="✉️", layout="wide")
+    st.title("✉️ Region-wise Performance Mail Generator")
+    st.caption("Upload the Performance Cockpit dashboard HTML file(s) – one per region, or one file with several regions – "
+               "and get a ready-to-send mail for each region.")
+
+    with st.sidebar:
+        st.header("Mail settings")
+        audience = st.radio("Audience", ["Client / leadership", "Internal team (BMs & reps)"])
+        company = st.text_input("Your company", "Denave India")
+        program = st.text_input("Program name", "Canon CPP")
+        recipient = st.text_input("Recipient name (client mail)", "")
+        next_month = st.text_input("Next month label", "October")
+        st.subheader("Signature")
+        sender = st.text_input("Your name", "")
+        designation = st.text_input("Designation", "")
+        phone = st.text_input("Phone", "")
+        email = st.text_input("Email", "")
+        deadline = review_call = ""
+        if audience.startswith("Internal"):
+            st.subheader("Internal mail details")
+            deadline = st.text_input("Recovery-plan deadline", "")
+            review_call = st.text_input("Review call date/time", "")
+
+    cfg = dict(audience=audience, company=company, program=program, recipient=recipient, next_month=next_month,
+               sender=sender, designation=designation, phone=phone, email=email, deadline=deadline, review_call=review_call)
+
+    files = st.file_uploader("Upload dashboard HTML file(s)", type=["html", "htm"], accept_multiple_files=True)
+    if not files:
+        st.info("👆 Upload a dashboard file to begin. You can upload North, South, East, West … files together.")
+        return
+
+    summaries = {}
+    for f in files:
         try:
-            supabase.table(table_name).delete().neq("id", -1).execute()
-        except Exception:
-            pass
-        if not df_copy.empty:
-            records = df_copy.to_dict("records")
-            for i in range(0, len(records), 100):
-                supabase.table(table_name).insert(records[i:i+100]).execute()
-        return True
-    except Exception as e:
-        st.error(f"❌ Save failed for `{table_name}`: {e}")
-        return False
-
-def sanitize_record(record: dict) -> dict:
-    """Replace NaN/None/'nan' values with '' so Supabase's JSON encoder never chokes
-    on a stray float NaN (common when a GST/optional field is blank, e.g. ASM stores).
-    Also strips any stray HTML tags so pasted markup can never reach the DB or UI."""
-    clean = {}
-    for k, v in record.items():
-        if v is None:
-            clean[k] = ""
-        elif isinstance(v, float) and pd.isna(v):
-            clean[k] = ""
-        elif isinstance(v, str):
-            sv = v.strip()
-            if sv.lower() in ("nan", "none"):
-                clean[k] = ""
-            else:
-                clean[k] = strip_html_tags(sv)
-        else:
-            clean[k] = v
-    return clean
-
-def insert_planned_visit(record: dict):
-    try:
-        rec = {k: v for k, v in record.items() if k != "id"}
-        if "VisitDate" in rec:
-            v = rec["VisitDate"]
-            if hasattr(v, "strftime"):
-                rec["VisitDate"] = v.strftime("%Y-%m-%d")
-            else:
-                rec["VisitDate"] = str(v)
-        rec = sanitize_record(rec)
-        rec = to_db_record(rec)  # PascalCase -> actual lowercase DB columns
-        response = supabase.table("planned_visits").insert(rec).execute()
-        if response.data:
-            return response.data[0].get("id")
-        return None
-    except Exception as e:
-        st.error(f"❌ Insert failed: {e}")
-        return None
-
-def delete_planned_visit(row_id):
-    try:
-        supabase.table("planned_visits").delete().eq("id", int(row_id)).execute()
-        return True
-    except Exception as e:
-        st.error(f"❌ Delete failed: {e}")
-        return False
-
-def insert_gst_row(record: dict):
-    try:
-        rec = {k: v for k, v in record.items() if k != "id"}
-        rec = sanitize_record(rec)
-        rec = to_db_record(rec)  # PascalCase -> actual lowercase DB columns
-        response = supabase.table("gst_master").insert(rec).execute()
-        if response.data:
-            return response.data[0].get("id")
-        return None
-    except Exception as e:
-        st.error(f"❌ Store insert failed: {e}")
-        return None
-
-def delete_gst_row(store_id):
-    try:
-        # Actual DB column is lowercase "storeid"
-        supabase.table("gst_master").delete().eq(to_db_key("StoreID"), str(store_id)).execute()
-        return True
-    except Exception as e:
-        st.error(f"❌ Store delete failed: {e}")
-        return False
-
-def insert_employee_row(record: dict):
-    try:
-        rec = {k: v for k, v in record.items() if k != "id"}
-        rec = sanitize_record(rec)
-        rec = to_db_record(rec)  # PascalCase -> actual lowercase DB columns
-        response = supabase.table("employee_master").insert(rec).execute()
-        if response.data:
-            return response.data[0].get("id")
-        return None
-    except Exception as e:
-        st.error(f"❌ Employee insert failed: {e}")
-        return None
-
-def delete_employee_row(emp_code):
-    try:
-        # Actual DB column is lowercase "employeecode"
-        supabase.table("employee_master").delete().eq(to_db_key("EmployeeCode"), str(emp_code)).execute()
-        return True
-    except Exception as e:
-        st.error(f"❌ Employee delete failed: {e}")
-        return False
-
-# ====================== COLUMN CONSTANTS ======================
-EMP_COLS   = ["EmployeeCode", "EmployeeName", "Password", "Role"]
-GST_COLS   = ["StoreID", "StoreName", "GSTNumber", "City", "EmployeeCode"]
-PLAN_COLS  = ["EmployeeCode", "EmployeeName", "City", "Store", "GSTNumber", "StoreID", "VisitDate"]
-ADMIN_COLS = ["Username", "Password"]
-
-# ====================== DAILY VISIT CAP CONSTANTS ======================
-# Business rule: every employee/ASM must plan a MINIMUM of 3 store visits
-# for any date they plan at all, and a MAXIMUM of 10 store visits per date.
-# These are enforced as HARD limits (blocking, not just a warning) across
-# manual planning (New Beat Plan / Pending Stores / Quick Plan) and the
-# Admin "Auto-Plan Pending Stores" distribution.
-MIN_VISITS_PER_DAY = 3
-MAX_VISITS_PER_DAY = 10
-
-# ====================== INITIALIZE ======================
-if not init_db():
-    st.stop()
-
-if "employee_df" not in st.session_state:
-    st.session_state.employee_df = load_from_supabase("employee_master", EMP_COLS)
-if "gst_df" not in st.session_state:
-    st.session_state.gst_df = load_from_supabase("gst_master", GST_COLS)
-if "planned_df" not in st.session_state:
-    st.session_state.planned_df = load_from_supabase("planned_visits", PLAN_COLS, keep_id=True)
-if "admin_df" not in st.session_state:
-    st.session_state.admin_df = load_from_supabase("admin_master", ADMIN_COLS)
-
-for k, v in {
-    "logged_in": False, "role": "", "emp_code": "", "emp_name": "",
-    "is_asm": False, "selected_cities": []
-}.items():
-    if k not in st.session_state:
-        st.session_state[k] = v
-
-# ====================== HELPERS ======================
-def is_valid_gstin(gstin):
-    return bool(re.match(r"^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$", str(gstin).strip().upper()))
-
-def get_progress_color(current, max_val, min_val=0):
-    """Red if below the required minimum, otherwise the usual traffic-light scale."""
-    if min_val and current < min_val:
-        return "#ef4444"
-    pct = (current / max_val) * 100
-    return "#ef4444" if pct >= 100 else "#f59e0b" if pct >= 80 else "#10b981"
-
-def safe_col(df, col):
-    return df[col] if col in df.columns else pd.Series([""] * len(df))
-
-def get_day_visit_count(emp_code, visit_date):
-    """How many stores this employee/ASM already has planned for a specific date."""
-    plan_df = st.session_state.planned_df
-    if plan_df.empty or "VisitDate" not in plan_df.columns:
-        return 0
-    mask = (
-        (safe_col(plan_df, "EmployeeCode").astype(str) == str(emp_code)) &
-        (plan_df["VisitDate"] == visit_date)
-    )
-    return int(mask.sum())
-
-def is_duplicate_plan(emp_code, store_id, visit_date):
-    """True if this employee/ASM already has THIS store planned for THIS exact date.
-    Enforces: 'a store cannot be planned again for the same date'."""
-    plan_df = st.session_state.planned_df
-    if plan_df.empty or "VisitDate" not in plan_df.columns:
-        return False
-    mask = (
-        (safe_col(plan_df, "EmployeeCode").astype(str) == str(emp_code)) &
-        (safe_col(plan_df, "StoreID").astype(str) == str(store_id)) &
-        (plan_df["VisitDate"] == visit_date)
-    )
-    return bool(mask.any())
-
-def gst_chip_html(row):
-    """Returns a GST chip only if a GST number is actually present (ASM stores may have none)."""
-    gst_val = str(row.get("GSTNumber", "") or "").strip()
-    if gst_val and gst_val.lower() not in ("nan", "none"):
-        return f"<span class='store-chip'>🧾 {gst_val}</span>"
-    return ""
-
-def get_employee_role(emp_code):
-    """Returns 'ASM' or 'Employee' for a given employee code."""
-    emp_df = st.session_state.employee_df
-    if emp_df.empty or "EmployeeCode" not in emp_df.columns:
-        return "Employee"
-    match = emp_df[emp_df["EmployeeCode"].astype(str) == str(emp_code)]
-    if match.empty:
-        return "Employee"
-    return str(match.iloc[0].get("Role", "Employee")).strip() or "Employee"
-
-def get_pending_stores_for_employee(emp_code):
-    gst_df = st.session_state.gst_df
-    plan_df = st.session_state.planned_df
-
-    emp_stores = gst_df[safe_col(gst_df, "EmployeeCode").astype(str) == str(emp_code)] \
-        if not gst_df.empty else pd.DataFrame(columns=GST_COLS)
-
-    if emp_stores.empty:
-        return emp_stores
-
-    ever_planned_ids = set(
-        safe_col(
-            plan_df[safe_col(plan_df, "EmployeeCode").astype(str) == str(emp_code)],
-            "StoreID"
-        ).astype(str).str.strip()
-    ) if not plan_df.empty else set()
-
-    pending = emp_stores[~safe_col(emp_stores, "StoreID").astype(str).str.strip().isin(ever_planned_ids)]
-    return pending
-
-def download_beat_plan_button(df, key, filename_prefix="Beat_Plan"):
-    if not df.empty:
-        dl_df = df.drop(columns=["id"], errors="ignore")
-        output = io.BytesIO()
-        with pd.ExcelWriter(output, engine="openpyxl") as writer:
-            dl_df.to_excel(writer, index=False, sheet_name="Beat Plan")
-        output.seek(0)
-        st.download_button(
-            label="📥 Download Beat Plan (Excel)",
-            data=output.getvalue(),
-            file_name=f"{filename_prefix}_{date.today().strftime('%Y-%m-%d')}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            use_container_width=True,
-            key=key,
-        )
-
-def download_pending_button(pend_df, key, sel_date):
-    if pend_df is None or pend_df.empty:
-        return
-    cols = [c for c in ["EmployeeCode", "EmployeeName"] if c in pend_df.columns]
-    dl_df = pend_df[cols].copy() if cols else pend_df.copy()
-    dl_df.insert(0, "Date", sel_date.strftime("%Y-%m-%d"))
-    output = io.BytesIO()
-    with pd.ExcelWriter(output, engine="openpyxl") as writer:
-        dl_df.to_excel(writer, index=False, sheet_name="Pending")
-    output.seek(0)
-    st.download_button(
-        label="📥 Download Pending List (Excel)",
-        data=output.getvalue(),
-        file_name=f"Pending_Beat_Plan_{sel_date.strftime('%Y-%m-%d')}.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        use_container_width=True,
-        key=key,
-    )
-
-def download_pending_stores_button(pend_df, key, filename_prefix="Pending_Stores"):
-    if pend_df is None or pend_df.empty:
-        return
-    cols = [c for c in ["EmployeeCode", "EmployeeName", "StoreID", "StoreName", "City", "GSTNumber"] if c in pend_df.columns]
-    dl_df = pend_df[cols].copy() if cols else pend_df.copy()
-    output = io.BytesIO()
-    with pd.ExcelWriter(output, engine="openpyxl") as writer:
-        dl_df.to_excel(writer, index=False, sheet_name="Pending Stores")
-    output.seek(0)
-    st.download_button(
-        label="📥 Download Pending Stores (Excel)",
-        data=output.getvalue(),
-        file_name=f"{filename_prefix}_{date.today().strftime('%Y-%m-%d')}.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        use_container_width=True,
-        key=key,
-    )
-
-# ---- NEW: Store Master export (all stores, full details) ----
-def download_store_master_button(df, key, filename_prefix="Store_Master"):
-    """Lets Admin download the full Store Master (GST/store table) as Excel.
-    Includes StoreID, StoreName, GSTNumber, City, EmployeeCode for every store."""
-    if df is None or df.empty:
-        return
-    cols = [c for c in ["StoreID", "StoreName", "GSTNumber", "City", "EmployeeCode"] if c in df.columns]
-    dl_df = df[cols].copy() if cols else df.drop(columns=["id"], errors="ignore").copy()
-    output = io.BytesIO()
-    with pd.ExcelWriter(output, engine="openpyxl") as writer:
-        dl_df.to_excel(writer, index=False, sheet_name="Store Master")
-    output.seek(0)
-    st.download_button(
-        label="📥 Download Store Master (Excel)",
-        data=output.getvalue(),
-        file_name=f"{filename_prefix}_{date.today().strftime('%Y-%m-%d')}.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        use_container_width=True,
-        key=key,
-    )
-
-def render_pending_marquee(pend_stores):
-    if pend_stores is None or pend_stores.empty:
-        return
-    names = []
-    for _, r in pend_stores.iterrows():
-        nm = r.get("StoreName", "—")
-        ct = r.get("City", "")
-        names.append(f"🏪 {nm} ({ct})" if ct else f"🏪 {nm}")
-    content = "".join([f"<span>{n}</span>" for n in names * 2])
-    st.markdown(f"""
-        <div class='marquee-wrap'>
-            <div class='marquee-tag'>📦 {len(pend_stores)} NEVER PLANNED</div>
-            <div class='marquee-track'>
-                <div class='marquee-content'>{content}</div>
-            </div>
-        </div>""", unsafe_allow_html=True)
-
-def section_header(icon, title):
-    st.markdown(f"""
-        <div class='section-head'>
-            {icon} {title}
-            <div class='section-line'></div>
-        </div>""", unsafe_allow_html=True)
-
-def fetch_beat_status_live(sel_date):
-    try:
-        date_str = sel_date.strftime("%Y-%m-%d")
-        all_rows = []
-        batch_size = 1000
-        offset = 0
-        while True:
-            resp = (
-                supabase
-                .table("planned_visits")
-                .select("*")
-                .range(offset, offset + batch_size - 1)
-                .execute()
-            )
-            if not resp.data:
-                break
-            all_rows.extend(resp.data)
-            if len(resp.data) < batch_size:
-                break
-            offset += batch_size
-
-        if not all_rows:
-            return {}
-
-        df = pd.DataFrame(all_rows)
-        df = normalize_columns(df)
-
-        if "VisitDate" not in df.columns:
-            st.warning("⚠️ VisitDate column not found in planned_visits table.")
-            return {}
-
-        df["VisitDate"] = pd.to_datetime(df["VisitDate"], errors="coerce").dt.strftime("%Y-%m-%d")
-        df_date = df[df["VisitDate"] == date_str]
-
-        result = {}
-        if "EmployeeCode" in df_date.columns:
-            for ec in df_date["EmployeeCode"].astype(str):
-                ec = ec.strip()
-                if ec and ec.lower() != "nan":
-                    result[ec] = result.get(ec, 0) + 1
-        return result
-
-    except Exception as e:
-        st.warning(f"⚠️ Live DB check failed: {e}")
-        return {}
-
-
-def fetch_emp_plans_live(emp_code, sel_date):
-    try:
-        date_str = sel_date.strftime("%Y-%m-%d")
-        all_rows = []
-        batch_size = 1000
-        offset = 0
-        while True:
-            resp = (
-                supabase
-                .table("planned_visits")
-                .select("*")
-                .range(offset, offset + batch_size - 1)
-                .execute()
-            )
-            if not resp.data:
-                break
-            all_rows.extend(resp.data)
-            if len(resp.data) < batch_size:
-                break
-            offset += batch_size
-
-        if not all_rows:
-            return pd.DataFrame()
-
-        df = pd.DataFrame(all_rows)
-        df = normalize_columns(df)
-
-        if "VisitDate" in df.columns:
-            df["VisitDate"] = pd.to_datetime(df["VisitDate"], errors="coerce").dt.strftime("%Y-%m-%d")
-            df = df[df["VisitDate"] == date_str]
-        if "EmployeeCode" in df.columns:
-            df = df[df["EmployeeCode"].astype(str).str.strip() == str(emp_code).strip()]
-
-        return df.reset_index(drop=True)
-
-    except Exception as e:
-        st.warning(f"⚠️ Could not load details: {e}")
-        return pd.DataFrame()
-
-# ====================== BEAT PLAN PIVOT BUILDER ======================
-def build_beat_plan_pivot(fp_df):
-    pivot_index = [c for c in ["EmployeeCode", "EmployeeName", "GSTNumber", "Store", "City", "StoreID"] if c in fp_df.columns]
-    if not pivot_index or "VisitDate" not in fp_df.columns:
-        return pd.DataFrame()
-
-    pv = fp_df.copy()
-    pv["VisitDate"] = pd.to_datetime(pv["VisitDate"], errors="coerce")
-    pv = pv.dropna(subset=["VisitDate"])
-    if pv.empty:
-        return pd.DataFrame()
-
-    pivot = pv.pivot_table(
-        index=pivot_index,
-        columns="VisitDate",
-        values="VisitDate",
-        aggfunc="count",
-        fill_value=0,
-    )
-    pivot = pivot.reindex(sorted(pivot.columns), axis=1)
-    pivot.columns = [c.strftime("%Y-%m-%d") for c in pivot.columns]
-    pivot["Grand Total"] = pivot.sum(axis=1)
-    pivot = pivot.reset_index()
-    ordered_front = [c for c in ["EmployeeCode", "EmployeeName", "GSTNumber", "Store", "City", "StoreID"] if c in pivot.columns]
-    other_cols = [c for c in pivot.columns if c not in ordered_front]
-    pivot = pivot[ordered_front + other_cols]
-    return pivot
-
-# ====================== DAY-BUCKET DISTRIBUTION (MIN 3 / MAX 10 PER DAY) ======================
-def distribute_counts_over_days(total, n_days_available):
-    """
-    Splits `total` items across as few days as possible while respecting:
-      - MAX_VISITS_PER_DAY per day (hard cap)
-      - MIN_VISITS_PER_DAY per day (hard minimum) whenever a day is used
-      - never using more days than n_days_available
-
-    Returns (counts, unplannable) where:
-      counts      = list of per-day counts (len <= n_days_available), each
-                    between MIN_VISITS_PER_DAY and MAX_VISITS_PER_DAY (except
-                    the special case below where total itself is < MIN).
-      unplannable = number of items that couldn't be fit into any day at all
-                    because there weren't enough days available to keep every
-                    day within the max cap.
-    """
-    if total <= 0 or n_days_available <= 0:
-        return [], total
-
-    if total < MIN_VISITS_PER_DAY:
-        # Not enough stores to ever satisfy the minimum for a day. We still
-        # place them (on the first day) but flag this case for the caller so
-        # it can be reported — it's an unavoidable shortfall, not a bug.
-        return [total], 0
-
-    # Fewest days needed so no single day exceeds the max cap.
-    days_for_max_cap = -(-total // MAX_VISITS_PER_DAY)  # ceil division
-    days_used = min(max(days_for_max_cap, 1), n_days_available)
-
-    capacity = days_used * MAX_VISITS_PER_DAY
-    plannable = min(total, capacity)
-    unplannable = total - plannable
-
-    base = plannable // days_used
-    remainder = plannable % days_used
-    counts = [base] * days_used
-    for i in range(remainder):
-        counts[i] += 1
-
-    # Safety: if the even split still leaves some day below the minimum
-    # (can happen only in unusual edge cases), collapse onto fewer days.
-    while len(counts) > 1 and min(counts) < MIN_VISITS_PER_DAY:
-        smallest_idx = counts.index(min(counts))
-        smallest_val = counts.pop(smallest_idx)
-        # Redistribute the removed day's stores onto remaining days, capped at MAX.
-        i = 0
-        while smallest_val > 0 and i < len(counts):
-            room = MAX_VISITS_PER_DAY - counts[i]
-            add = min(room, smallest_val)
-            counts[i] += add
-            smallest_val -= add
-            i += 1
-        if smallest_val > 0:
-            # Couldn't fully redistribute — count it as unplannable.
-            unplannable += smallest_val
-
-    return counts, unplannable
-
-# ====================== AUTO-PLAN PENDING STORES (MANUAL, VIA BUTTON) ======================
-def auto_plan_pending_stores_all_employees(dry_run=False):
-    """
-    For every employee (and ASM), find all never-planned stores and auto-schedule them
-    starting on the FIRST Sunday of next month (the planning month).
-
-    Distribution honors the same hard caps as manual planning:
-      - MIN_VISITS_PER_DAY (3)  stores minimum on any day that gets used
-      - MAX_VISITS_PER_DAY (10) stores maximum on any single day
-
-    Returns a summary dict: {emp_code: {"planned": [...], "skipped": [...]}}
-    This only ever runs when the admin explicitly clicks the button below —
-    it is never triggered automatically.
-    """
-    emp_df  = st.session_state.employee_df
-    sundays = get_next_month_sundays()   # sorted list, earliest first
-
-    if not sundays:
-        return {"error": "No Sundays found in next month."}
-
-    if emp_df.empty or "EmployeeCode" not in emp_df.columns:
-        return {"error": "No employees found."}
-
-    summary     = {}
-    new_records = []
-
-    for _, erow in emp_df.iterrows():
-        ec = str(erow.get("EmployeeCode", "")).strip()
-        en = erow.get("EmployeeName", ec)
-        if not ec or ec.lower() == "nan":
+            data = load_dashboard(f.getvalue())
+        except Exception as exc:  # noqa: BLE001
+            st.error(f"**{f.name}**: {exc}")
             continue
-
-        pending = get_pending_stores_for_employee(ec).reset_index(drop=True)
-        if pending.empty:
-            summary[ec] = {"name": en, "planned": [], "skipped": []}
-            continue
-
-        counts, unplannable = distribute_counts_over_days(len(pending), len(sundays))
-
-        emp_planned = []
-        emp_skipped = []
-
-        store_idx = 0
-        for day_i, day_count in enumerate(counts):
-            target_sunday = sundays[day_i]
-            below_min_note = " ⚠️ below the 3-store minimum (not enough pending stores left)" if day_count < MIN_VISITS_PER_DAY else ""
-            for _ in range(day_count):
-                store_row = pending.iloc[store_idx]
-                store_idx += 1
-
-                new_record = {
-                    "EmployeeCode": ec,
-                    "EmployeeName": en,
-                    "City":         store_row.get("City", ""),
-                    "Store":        store_row.get("StoreName", ""),
-                    "StoreID":      store_row.get("StoreID", ""),
-                    "GSTNumber":    store_row.get("GSTNumber", ""),
-                    "VisitDate":    target_sunday,
-                }
-
-                if not dry_run:
-                    if is_duplicate_plan(ec, new_record["StoreID"], target_sunday):
-                        emp_skipped.append(f"{store_row.get('StoreName','—')} (already planned for this date)")
-                        continue
-                    new_id = insert_planned_visit(new_record)
-                    if new_id is not None:
-                        new_record["id"] = new_id
-                        new_records.append(new_record)
-                        emp_planned.append(
-                            f"{store_row.get('StoreName','—')} → {target_sunday.strftime('%d %b %Y')} (Sunday){below_min_note}"
-                        )
-                    else:
-                        emp_skipped.append(store_row.get("StoreName", "—"))
-                else:
-                    emp_planned.append(
-                        f"{store_row.get('StoreName','—')} → {target_sunday.strftime('%d %b %Y')} (Sunday){below_min_note}"
-                    )
-
-        # Any stores that couldn't fit within MAX_VISITS_PER_DAY × available Sundays
-        if unplannable > 0:
-            for _ in range(unplannable):
-                if store_idx < len(pending):
-                    store_row = pending.iloc[store_idx]
-                    store_idx += 1
-                    emp_skipped.append(f"{store_row.get('StoreName','—')} (no day slot left within 10/day cap)")
-
-        summary[ec] = {"name": en, "planned": emp_planned, "skipped": emp_skipped}
-
-    # Update session state with newly inserted records
-    if not dry_run and new_records:
-        new_df = pd.DataFrame(new_records)
-        if "VisitDate" in new_df.columns:
-            new_df["VisitDate"] = pd.to_datetime(new_df["VisitDate"], errors="coerce").dt.date
-        st.session_state.planned_df = pd.concat(
-            [st.session_state.planned_df, new_df], ignore_index=True
-        )
-
-    return summary
-
-# ====================== NEXT-MONTH DATE INPUT HELPER ======================
-def next_month_date_input(label, key, default_to_first=True):
-    """
-    A date_input restricted to next month only.
-    Returns selected date or None if restriction not possible.
-    """
-    first_day, last_day = get_next_month_range()
-    default_val = first_day if default_to_first else min(last_day, first_day + timedelta(days=6))
-    # Find first Sunday of next month as default
-    d = first_day
-    while d <= last_day:
-        if d.weekday() == 6:
-            default_val = d
-            break
-        d += timedelta(days=1)
-
-    selected = st.date_input(
-        label,
-        value=default_val,
-        min_value=first_day,
-        max_value=last_day,
-        key=key,
-    )
-    return selected
-
-# ====================== LOGIN PAGE ======================
-if not st.session_state.logged_in:
-    st.markdown("<h1 class='main-header'>🚀 Beat Plan Pro</h1>", unsafe_allow_html=True)
-    st.markdown("<p class='sub-header'>Smart Store Visit Planning System</p>", unsafe_allow_html=True)
-
-    col1, col2, col3 = st.columns([1, 2, 1])
-    with col2:
-        login_type = st.radio("Login Type", ["👨‍💼 Admin", "👷 Employee / ASM"], horizontal=True)
-
-        if login_type == "👨‍💼 Admin":
-            st.markdown("### Admin Login")
-            user = st.text_input("Username", key="admin_user")
-            pwd  = st.text_input("Password", type="password", key="admin_pwd")
-            if st.button("🔓 Login as Admin", type="primary", use_container_width=True):
-                if not user or not pwd:
-                    st.error("❌ Enter both fields.")
-                else:
-                    df = st.session_state.admin_df.copy()
-                    if "Username" not in df.columns or "Password" not in df.columns:
-                        st.error("❌ admin_master columns missing.")
-                    else:
-                        match = (
-                            (df["Username"].astype(str).str.strip() == user.strip()) &
-                            (df["Password"].astype(str).str.strip() == pwd.strip())
-                        )
-                        if match.any():
-                            st.session_state.logged_in = True
-                            st.session_state.role = "admin"
-                            st.rerun()
-                        else:
-                            st.error("❌ Invalid credentials.")
-        else:
-            st.markdown("### Employee / ASM Login")
-            st.caption("Both Employees and Area Sales Managers (ASM) log in here using the same Employee Code.")
-            emp_in = st.text_input("Employee Code", key="emp_code_login")
-            pwd_in = st.text_input("Password", type="password", key="emp_pwd_login")
-            if st.button("🔓 Login", type="primary", use_container_width=True):
-                if not emp_in or not pwd_in:
-                    st.error("❌ Enter both fields.")
-                else:
-                    df = st.session_state.employee_df.copy()
-                    if "EmployeeCode" not in df.columns or "Password" not in df.columns:
-                        st.error("❌ employee_master columns missing.")
-                    else:
-                        match = df[
-                            (df["EmployeeCode"].astype(str).str.strip() == emp_in.strip()) &
-                            (df["Password"].astype(str).str.strip()     == pwd_in.strip())
-                        ]
-                        if not match.empty:
-                            st.session_state.logged_in = True
-                            st.session_state.role      = "employee"
-                            st.session_state.emp_code  = str(match.iloc[0]["EmployeeCode"])
-                            st.session_state.emp_name  = match.iloc[0]["EmployeeName"]
-                            st.session_state.is_asm    = str(match.iloc[0].get("Role", "Employee")).strip() == "ASM"
-                            st.rerun()
-                        else:
-                            st.error("❌ Invalid credentials.")
-    st.stop()
-
-# ====================== LOGOUT ======================
-c1, c2, c3 = st.columns([10, 1, 1])
-with c3:
-    if st.button("🚪 Logout", use_container_width=True):
-        for k, v in {
-            "logged_in": False, "role": "", "emp_code": "", "emp_name": "",
-            "is_asm": False, "selected_cities": []
-        }.items():
-            st.session_state[k] = v
-        st.rerun()
-
-# ====================== ADMIN PANEL ======================
-if st.session_state.role == "admin":
-    st.markdown("<h1 class='main-header'>🛠️ Admin Dashboard</h1>", unsafe_allow_html=True)
-    st.markdown("<p class='sub-header'>Beat Plan Pro — Control Center</p>", unsafe_allow_html=True)
-
-    admin_menu = st.sidebar.radio(
-        "Navigation",
-        ["📊 Dashboard", "📋 Beat Plan Status", "👥 Manage Employees", "🏪 Manage Stores", "📋 View Plans", "🤖 Auto-Plan Pending Stores", "🔄 Refresh Data"],
-    )
-
-    # ── DASHBOARD ──
-    if admin_menu == "📊 Dashboard":
-        emp_df  = st.session_state.employee_df
-        plan_df = st.session_state.planned_df
-
-        with st.spinner("🔄 Checking today's beat plan status from database…"):
-            live_status = fetch_beat_status_live(date.today())
-
-        today_emp_codes    = set(live_status.keys())
-        total_emp          = len(emp_df)
-        done_count         = len(today_emp_codes)
-        pending_count      = total_emp - done_count
-        today_total_visits = sum(live_status.values())
-
-        cols = st.columns(5)
-        cards = [
-            ("blue",   "👥", "Total Employees", total_emp,          "Employees + ASM"),
-            ("green",  "🏪", "Total Stores",    len(st.session_state.gst_df), "In database"),
-            ("purple", "📋", "Total Plans",     len(plan_df),       "All time"),
-            ("green",  "✅", "Done Today",      done_count,         "Beat plan submitted"),
-            ("red",    "⏳", "Pending Today",   pending_count,      "Yet to submit"),
-        ]
-        for col, (color, icon, label, val, sub) in zip(cols, cards):
-            with col:
-                st.markdown(f"""
-                    <div class='metric-card {color}'>
-                        <div class='metric-icon'>{icon}</div>
-                        <div class='metric-label'>{label}</div>
-                        <div class='metric-value'>{val}</div>
-                        <div class='metric-sub'>{sub}</div>
-                    </div>""", unsafe_allow_html=True)
-
-        st.markdown("---")
-        col_done, col_pend = st.columns(2)
-
-        with col_done:
-            section_header("✅", f"Done — {date.today().strftime('%d %b %Y')} ({done_count})")
-            if not today_emp_codes:
-                st.info("No submissions yet today.")
-            else:
-                done_emps = emp_df[emp_df["EmployeeCode"].astype(str).isin(today_emp_codes)] \
-                    if "EmployeeCode" in emp_df.columns else pd.DataFrame()
-                for _, row in done_emps.iterrows():
-                    ec  = str(row.get("EmployeeCode", ""))
-                    en  = row.get("EmployeeName", ec)
-                    cnt = live_status.get(ec, 0)
-                    role_val = str(row.get("Role", "Employee")).strip() or "Employee"
-                    role_chip = f"<span class='role-chip {'asm' if role_val=='ASM' else 'emp'}'>{'ASM' if role_val=='ASM' else 'Employee'}</span>"
-                    initials = "".join([w[0] for w in en.split()[:2]]).upper()
-                    st.markdown(f"""
-                        <div class='emp-card'>
-                            <div class='emp-avatar done'>{initials}</div>
-                            <div class='emp-info'>
-                                <div class='emp-name'>{en} {role_chip}</div>
-                                <div class='emp-code'>{ec}</div>
-                                <div class='emp-count'>🏪 {cnt} store(s) in database</div>
-                            </div>
-                            <div class='emp-badge badge-done'>✅ Done</div>
-                        </div>""", unsafe_allow_html=True)
-
-        with col_pend:
-            section_header("⏳", f"Pending — {date.today().strftime('%d %b %Y')} ({pending_count})")
-            if "EmployeeCode" in emp_df.columns:
-                pend_emps = emp_df[~emp_df["EmployeeCode"].astype(str).isin(today_emp_codes)]
-                if pend_emps.empty:
-                    st.success("🎉 All employees have submitted today!")
-                else:
-                    download_pending_button(pend_emps, "pend_dl_dash", date.today())
-                    for _, row in pend_emps.iterrows():
-                        ec = str(row.get("EmployeeCode", ""))
-                        en = row.get("EmployeeName", ec)
-                        role_val = str(row.get("Role", "Employee")).strip() or "Employee"
-                        role_chip = f"<span class='role-chip {'asm' if role_val=='ASM' else 'emp'}'>{'ASM' if role_val=='ASM' else 'Employee'}</span>"
-                        initials = "".join([w[0] for w in en.split()[:2]]).upper()
-                        st.markdown(f"""
-                            <div class='emp-card'>
-                                <div class='emp-avatar pending'>{initials}</div>
-                                <div class='emp-info'>
-                                    <div class='emp-name'>{en} {role_chip}</div>
-                                    <div class='emp-code'>{ec}</div>
-                                    <div class='emp-count'>No record found in database</div>
-                                </div>
-                                <div class='emp-badge badge-pending'>⏳ Pending</div>
-                            </div>""", unsafe_allow_html=True)
-
-        st.markdown("---")
-        section_header("📦", "Pending Stores — Never Planned (Per Employee/ASM)")
-        st.caption("ℹ️ Stores assigned to an employee/ASM that have not been included in ANY beat plan yet (all-time).")
-        emp_list = emp_df.copy() if "EmployeeCode" in emp_df.columns else pd.DataFrame()
-        if emp_list.empty:
-            st.info("No employees found.")
-        else:
-            summary_rows = []
-            all_pending_frames = []
-            for _, erow in emp_list.iterrows():
-                ec = str(erow.get("EmployeeCode", ""))
-                en = erow.get("EmployeeName", ec)
-                pend_stores = get_pending_stores_for_employee(ec)
-                summary_rows.append({"EmployeeCode": ec, "EmployeeName": en, "PendingStores": len(pend_stores)})
-                if not pend_stores.empty:
-                    tagged = pend_stores.copy()
-                    if "EmployeeCode" not in tagged.columns:
-                        tagged.insert(0, "EmployeeCode", ec)
-                    else:
-                        tagged["EmployeeCode"] = ec
-                    if "EmployeeName" not in tagged.columns:
-                        tagged.insert(0, "EmployeeName", en)
-                    else:
-                        tagged["EmployeeName"] = en
-                    all_pending_frames.append(tagged)
-
-            summary_df = pd.DataFrame(summary_rows).sort_values("PendingStores", ascending=False)
-            total_pending_stores = int(summary_df["PendingStores"].sum())
-
-            c1, c2 = st.columns(2)
-            with c1:
-                st.markdown(f"""
-                    <div class='metric-card amber'>
-                        <div class='metric-icon'>📦</div>
-                        <div class='metric-label'>Total Never-Planned Stores</div>
-                        <div class='metric-value'>{total_pending_stores}</div>
-                        <div class='metric-sub'>Across all employees/ASM</div>
-                    </div>""", unsafe_allow_html=True)
-            with c2:
-                emps_with_pending = int((summary_df["PendingStores"] > 0).sum())
-                st.markdown(f"""
-                    <div class='metric-card red'>
-                        <div class='metric-icon'>👥</div>
-                        <div class='metric-label'>Employees With Pending Stores</div>
-                        <div class='metric-value'>{emps_with_pending}</div>
-                        <div class='metric-sub'>Out of {len(emp_list)} total</div>
-                    </div>""", unsafe_allow_html=True)
-
-            st.markdown("#### 📊 Employee-wise Pending Store Count")
-            st.dataframe(summary_df, use_container_width=True, hide_index=True)
-
-            if all_pending_frames:
-                combined_pending = pd.concat(all_pending_frames, ignore_index=True)
-                download_pending_stores_button(combined_pending, "all_emp_pend_store_dl", "All_Employees_Pending_Stores")
-            else:
-                st.success("🎉 Every assigned store has been planned at least once by its employee!")
-
-            st.markdown("#### 📋 Store-level Detail (Per Employee/ASM)")
-            for _, erow in emp_list.iterrows():
-                ec = str(erow.get("EmployeeCode", ""))
-                en = erow.get("EmployeeName", ec)
-                pend_stores = get_pending_stores_for_employee(ec)
-                if pend_stores.empty:
-                    continue
-                with st.expander(f"⏳ {en} ({ec}) — {len(pend_stores)} store(s) never planned"):
-                    show_cols = [c for c in ["StoreID", "StoreName", "City", "GSTNumber"] if c in pend_stores.columns]
-                    st.dataframe(pend_stores[show_cols] if show_cols else pend_stores,
-                                 use_container_width=True, hide_index=True)
-                    download_pending_stores_button(pend_stores, f"pend_store_dl_{ec}", f"Pending_Stores_{ec}")
-
-        st.markdown("---")
-        section_header("📋", "Recent Plans")
-        if not plan_df.empty:
-            disp = plan_df.drop(columns=["id"], errors="ignore")
-            disp = disp.sort_values("VisitDate", ascending=False).head(10) \
-                if "VisitDate" in disp.columns else disp.head(10)
-            st.dataframe(disp, use_container_width=True, hide_index=True)
-        else:
-            st.info("No plans yet.")
-
-    # ── BEAT PLAN STATUS ──
-    elif admin_menu == "📋 Beat Plan Status":
-        st.markdown("### 📋 Beat Plan Status")
-        st.caption("ℹ️ Status is fetched live from the database every time you change the date.")
-
-        emp_df   = st.session_state.employee_df
-        sel_date = st.date_input("📅 Select Date", value=date.today())
-
-        with st.spinner(f"🔄 Querying database for {sel_date.strftime('%d %b %Y')}…"):
-            live_status = fetch_beat_status_live(sel_date)
-
-        date_emp_codes = set(live_status.keys())
-        done_n    = len(date_emp_codes)
-        pending_n = len(emp_df) - done_n
-
-        c1, c2, c3 = st.columns(3)
-        with c1:
-            st.markdown(f"""
-                <div class='metric-card blue'>
-                    <div class='metric-icon'>👥</div>
-                    <div class='metric-label'>Total Employees</div>
-                    <div class='metric-value'>{len(emp_df)}</div>
-                </div>""", unsafe_allow_html=True)
-        with c2:
-            st.markdown(f"""
-                <div class='metric-card green'>
-                    <div class='metric-icon'>✅</div>
-                    <div class='metric-label'>Submitted</div>
-                    <div class='metric-value'>{done_n}</div>
-                    <div class='metric-sub'>Records found in DB</div>
-                </div>""", unsafe_allow_html=True)
-        with c3:
-            st.markdown(f"""
-                <div class='metric-card red'>
-                    <div class='metric-icon'>⏳</div>
-                    <div class='metric-label'>Pending</div>
-                    <div class='metric-value'>{pending_n}</div>
-                    <div class='metric-sub'>No record in DB</div>
-                </div>""", unsafe_allow_html=True)
-
-        st.markdown("---")
-
-        tab_done, tab_pend = st.tabs([
-            f"✅ Done ({done_n})",
-            f"⏳ Pending ({pending_n})"
-        ])
-
-        with tab_done:
-            if not date_emp_codes:
-                st.info(f"No beat plans found in database for {sel_date.strftime('%d %b %Y')}.")
-            else:
-                done_emps = emp_df[emp_df["EmployeeCode"].astype(str).isin(date_emp_codes)] \
-                    if "EmployeeCode" in emp_df.columns else pd.DataFrame()
-                for _, row in done_emps.iterrows():
-                    ec  = str(row.get("EmployeeCode", ""))
-                    en  = row.get("EmployeeName", ec)
-                    cnt = live_status.get(ec, 0)
-                    with st.expander(f"✅  {en}  ({ec})  —  {cnt} store(s) in database"):
-                        det_df = fetch_emp_plans_live(ec, sel_date)
-                        if not det_df.empty:
-                            show_cols = [c for c in ["Store","City","GSTNumber","StoreID","VisitDate"] if c in det_df.columns]
-                            st.dataframe(det_df[show_cols] if show_cols else det_df,
-                                         use_container_width=True, hide_index=True)
-                        else:
-                            st.info("No store details found.")
-
-        with tab_pend:
-            if "EmployeeCode" not in emp_df.columns:
-                st.warning("Employee data not loaded.")
-            else:
-                pend_emps = emp_df[~emp_df["EmployeeCode"].astype(str).isin(date_emp_codes)]
-                if pend_emps.empty:
-                    st.success(f"🎉 All employees have submitted for {sel_date.strftime('%d %b %Y')}!")
-                else:
-                    download_pending_button(pend_emps, "pend_dl_status", sel_date)
-                    for _, row in pend_emps.iterrows():
-                        ec = str(row.get("EmployeeCode", ""))
-                        en = row.get("EmployeeName", ec)
-                        initials = "".join([w[0] for w in en.split()[:2]]).upper()
-                        st.markdown(f"""
-                            <div class='emp-card'>
-                                <div class='emp-avatar pending'>{initials}</div>
-                                <div class='emp-info'>
-                                    <div class='emp-name'>{en}</div>
-                                    <div class='emp-code'>{ec}</div>
-                                    <div class='emp-count'>No record found in database for this date</div>
-                                </div>
-                                <div class='emp-badge badge-pending'>⏳ Pending</div>
-                            </div>""", unsafe_allow_html=True)
-
-    # ── MANAGE EMPLOYEES ──
-    elif admin_menu == "👥 Manage Employees":
-        st.markdown("### 👥 Manage Employees & ASM")
-        tab1, tab2, tab3 = st.tabs(["👁️ View", "➕ Add", "🗑️ Delete"])
-        with tab1:
-            disp = st.session_state.employee_df.drop(columns=["Password"], errors="ignore")
-            if not disp.empty:
-                st.dataframe(disp, use_container_width=True, hide_index=True)
-            else:
-                st.info("No employees found.")
-        with tab2:
-            with st.form("add_emp"):
-                c1, c2 = st.columns(2)
-                with c1:
-                    ecode = st.text_input("Employee Code*")
-                    ename = st.text_input("Employee Name*")
-                with c2:
-                    epwd  = st.text_input("Password*", type="password")
-                    erole = st.selectbox("Role*", ["Employee", "ASM"], help="ASM = Area Sales Manager. ASM stores don't require a GST number.")
-                if st.form_submit_button("➕ Add Employee", type="primary"):
-                    if not ecode or not ename or not epwd:
-                        st.error("All fields required!")
-                    elif safe_col(st.session_state.employee_df, "EmployeeCode").astype(str).str.upper().eq(ecode.strip().upper()).any():
-                        st.error("❌ Code already exists!")
-                    else:
-                        new_record = {
-                            "EmployeeCode": ecode.strip().upper(),
-                            "EmployeeName": ename.strip().title(),
-                            "Password": epwd.strip(),
-                            "Role": erole,
-                        }
-                        new_id = insert_employee_row(new_record)
-                        if new_id is not None:
-                            new_record["id"] = new_id
-                            st.session_state.employee_df = pd.concat(
-                                [st.session_state.employee_df, pd.DataFrame([new_record])],
-                                ignore_index=True
-                            )
-                            st.success(f"✅ Added as {erole}!")
-                            st.rerun()
-        with tab3:
-            if st.session_state.employee_df.empty:
-                st.info("No employees.")
-            else:
-                emp_del = st.selectbox("Select", safe_col(st.session_state.employee_df, "EmployeeCode").unique())
-                if st.button("🗑️ Delete", type="primary"):
-                    if delete_employee_row(emp_del):
-                        st.session_state.employee_df = st.session_state.employee_df[
-                            safe_col(st.session_state.employee_df, "EmployeeCode") != emp_del
-                        ].reset_index(drop=True)
-                        st.success(f"✅ {emp_del} deleted!")
-                        st.rerun()
-
-    # ── MANAGE STORES ──
-    elif admin_menu == "🏪 Manage Stores":
-        st.markdown("### 🏪 Manage Stores")
-        st.caption("ℹ️ GST Number is required for stores assigned to Employees. For ASM, GST is optional (ASM stores often don't have a GST number).")
-        tab1, tab2, tab3 = st.tabs(["👁️ View", "➕ Add", "🗑️ Delete"])
-        with tab1:
-            if not st.session_state.gst_df.empty:
-                st.dataframe(st.session_state.gst_df, use_container_width=True, hide_index=True)
-                # NEW: Admin can export the full Store Master to Excel
-                download_store_master_button(st.session_state.gst_df, "store_master_dl_admin")
-            else:
-                st.info("No stores found.")
-        with tab2:
-            emp_opts = safe_col(st.session_state.employee_df, "EmployeeCode").unique().tolist() or ["—"]
-            emp_sel = st.selectbox("Assign to Employee/ASM*", emp_opts, key="store_assign_emp")
-            assigned_role = get_employee_role(emp_sel)
-            gst_required = assigned_role != "ASM"
-            if assigned_role == "ASM":
-                st.info("ℹ️ This is an ASM — GST Number is optional for this store.")
-
-            with st.form("add_store"):
-                c1, c2 = st.columns(2)
-                with c1:
-                    sname = st.text_input("Store Name*")
-                    city  = st.text_input("City*")
-                with c2:
-                    gstno = st.text_input(
-                        f"GST Number{'*' if gst_required else ' (optional for ASM)'}",
-                        max_chars=15
-                    )
-                if st.form_submit_button("➕ Add Store", type="primary"):
-                    gc = gstno.strip().upper()
-                    if not sname or not city:
-                        st.error("Store name and city are required!")
-                    elif gst_required and not gc:
-                        st.error("❌ GST Number required for stores assigned to an Employee!")
-                    elif gc and not is_valid_gstin(gc):
-                        st.error("❌ Invalid GST! e.g. 22AAAAA0000A1Z5")
-                    elif gc and safe_col(st.session_state.gst_df, "GSTNumber").astype(str).str.upper().eq(gc).any():
-                        st.error("❌ GST exists!")
-                    else:
-                        nid = f"S{len(st.session_state.gst_df)+1:05d}"
-                        new_record = {
-                            "StoreID": nid,
-                            "StoreName": sname.strip().title(),
-                            "GSTNumber": gc,  # may be blank for ASM
-                            "City": city.strip().title(),
-                            "EmployeeCode": emp_sel,
-                        }
-                        new_id = insert_gst_row(new_record)
-                        if new_id is not None:
-                            new_record["id"] = new_id
-                            st.session_state.gst_df = pd.concat(
-                                [st.session_state.gst_df, pd.DataFrame([new_record])],
-                                ignore_index=True
-                            )
-                            st.success("✅ Store added!")
-                            st.rerun()
-        with tab3:
-            if st.session_state.gst_df.empty:
-                st.info("No stores.")
-            else:
-                sdel = st.selectbox("Select Store", safe_col(st.session_state.gst_df, "StoreID").unique())
-                if st.button("🗑️ Delete Store", type="primary"):
-                    if delete_gst_row(sdel):
-                        st.session_state.gst_df = st.session_state.gst_df[
-                            safe_col(st.session_state.gst_df, "StoreID") != sdel
-                        ].reset_index(drop=True)
-                        st.success(f"✅ {sdel} deleted!")
-                        st.rerun()
-
-    # ── VIEW PLANS ──
-    elif admin_menu == "📋 View Plans":
-        st.markdown("### 📋 All Visit Plans")
-        c1, c2, c3 = st.columns(3)
-        with c1: femp  = st.selectbox("Employee", ["All"] + list(safe_col(st.session_state.planned_df, "EmployeeName").dropna().unique()))
-        with c2: fcity = st.selectbox("City",     ["All"] + list(safe_col(st.session_state.planned_df, "City").dropna().unique()))
-        with c3: drange = st.date_input("Date Range", value=(date.today()-timedelta(days=30), date.today()))
-
-        fp = st.session_state.planned_df.drop(columns=["id"], errors="ignore").copy()
-        if femp  != "All" and "EmployeeName" in fp.columns: fp = fp[fp["EmployeeName"] == femp]
-        if fcity != "All" and "City"         in fp.columns: fp = fp[fp["City"]          == fcity]
-        if isinstance(drange, (list, tuple)) and len(drange) == 2 and "VisitDate" in fp.columns:
-            fp = fp[(fp["VisitDate"] >= drange[0]) & (fp["VisitDate"] <= drange[1])]
-
-        st.markdown(f"**{len(fp)} record(s) found**")
-
-        view_tab1, view_tab2 = st.tabs(["📋 List View", "📊 Beat Plan (Pivot)"])
-
-        with view_tab1:
-            st.dataframe(fp.sort_values("VisitDate", ascending=False) if "VisitDate" in fp.columns else fp,
-                         use_container_width=True, hide_index=True)
-            download_beat_plan_button(fp, "admin_dl", "Beat_Plan_Admin")
-
-        with view_tab2:
-            st.caption("ℹ️ One row per employee/store, one column per visit date (1 = planned that day). GST may be blank for ASM stores. Matches the portal's Beat Plan export format.")
-            pivot = build_beat_plan_pivot(fp)
-            if pivot.empty:
-                st.info("No data to pivot for the current filters.")
-            else:
-                st.dataframe(pivot, use_container_width=True, hide_index=True)
-
-                output = io.BytesIO()
-                with pd.ExcelWriter(output, engine="openpyxl") as writer:
-                    pivot.to_excel(writer, index=False, sheet_name="Beat Plan")
-                output.seek(0)
-                st.download_button(
-                    label="📥 Download Beat Plan (Pivot Excel)",
-                    data=output.getvalue(),
-                    file_name=f"Beat_Plan_Pivot_{date.today().strftime('%Y-%m-%d')}.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    use_container_width=True,
-                    key="pivot_dl_admin",
-                )
-
-    # ── AUTO-PLAN PENDING STORES (MANUAL, BUTTON-TRIGGERED ONLY) ──
-    elif admin_menu == "🤖 Auto-Plan Pending Stores":
-        st.markdown("### 🤖 Auto-Plan Pending Stores")
-
-        first_day, last_day = get_next_month_range()
-        sundays = get_next_month_sundays()
-
-        # Info banner
-        st.markdown(f"""
-            <div class='info-banner'>
-                📅 <strong>How it works:</strong> Click the button below to automatically schedule all
-                never-planned stores (Employee or ASM) on the <strong>Sundays of next month
-                ({first_day.strftime('%B %Y')})</strong>.
-                Sundays available: {', '.join([s.strftime('%d %b') for s in sundays]) if sundays else 'None found'}.
-                Each day used gets a <strong>minimum of {MIN_VISITS_PER_DAY}</strong> and a
-                <strong>maximum of {MAX_VISITS_PER_DAY}</strong> stores — both are hard limits.
-                Nothing runs automatically — this only happens when you click "Run Auto-Plan Now" below.
-            </div>""", unsafe_allow_html=True)
-
-        # Summary of pending stores
-        emp_df = st.session_state.employee_df
-        total_pending = 0
-        emp_pending_summary = []
-        if "EmployeeCode" in emp_df.columns:
-            for _, erow in emp_df.iterrows():
-                ec = str(erow.get("EmployeeCode", ""))
-                en = erow.get("EmployeeName", ec)
-                ps = get_pending_stores_for_employee(ec)
-                total_pending += len(ps)
-                emp_pending_summary.append({
-                    "EmployeeCode": ec, "EmployeeName": en, "PendingStores": len(ps)
-                })
-
-        c1, c2, c3 = st.columns(3)
-        with c1:
-            st.markdown(f"""
-                <div class='metric-card amber'>
-                    <div class='metric-icon'>📦</div>
-                    <div class='metric-label'>Total Pending Stores</div>
-                    <div class='metric-value'>{total_pending}</div>
-                    <div class='metric-sub'>Ready to auto-plan</div>
-                </div>""", unsafe_allow_html=True)
-        with c2:
-            st.markdown(f"""
-                <div class='metric-card blue'>
-                    <div class='metric-icon'>📅</div>
-                    <div class='metric-label'>Available Sundays</div>
-                    <div class='metric-value'>{len(sundays)}</div>
-                    <div class='metric-sub'>{first_day.strftime('%B %Y')}</div>
-                </div>""", unsafe_allow_html=True)
-        with c3:
-            total_slots = len(sundays) * MAX_VISITS_PER_DAY
-            st.markdown(f"""
-                <div class='metric-card green'>
-                    <div class='metric-icon'>🎯</div>
-                    <div class='metric-label'>Total Available Slots</div>
-                    <div class='metric-value'>{total_slots}</div>
-                    <div class='metric-sub'>{MIN_VISITS_PER_DAY}–{MAX_VISITS_PER_DAY} stores × {len(sundays)} Sundays</div>
-                </div>""", unsafe_allow_html=True)
-
-        if emp_pending_summary:
-            st.markdown("#### 📊 Pending Stores by Employee/ASM")
-            st.dataframe(pd.DataFrame(emp_pending_summary).sort_values("PendingStores", ascending=False),
-                         use_container_width=True, hide_index=True)
-
-        st.markdown("---")
-
-        col_preview, col_run = st.columns(2)
-
-        with col_preview:
-            st.markdown("#### 🔍 Preview (Dry Run)")
-            st.caption("See what would be scheduled without actually saving anything.")
-            if st.button("🔍 Preview Auto-Plan", use_container_width=True, key="dry_run_btn"):
-                with st.spinner("🔄 Calculating preview…"):
-                    preview_result = auto_plan_pending_stores_all_employees(dry_run=True)
-                if "error" in preview_result:
-                    st.error(preview_result["error"])
-                else:
-                    total_would_plan = sum(len(v["planned"]) for v in preview_result.values())
-                    total_would_skip = sum(len(v["skipped"]) for v in preview_result.values())
-                    st.success(f"✅ Preview: {total_would_plan} stores would be planned, {total_would_skip} skipped (couldn't fit within the {MIN_VISITS_PER_DAY}-{MAX_VISITS_PER_DAY}/day rule or already planned).")
-                    for ec, data in preview_result.items():
-                        if data["planned"] or data["skipped"]:
-                            with st.expander(f"👤 {data['name']} ({ec}) — {len(data['planned'])} planned, {len(data['skipped'])} skipped"):
-                                if data["planned"]:
-                                    st.markdown("**Would be planned:**")
-                                    for p in data["planned"]:
-                                        st.markdown(f"  ✅ {p}")
-                                if data["skipped"]:
-                                    st.markdown("**Would be skipped:**")
-                                    for s in data["skipped"]:
-                                        st.markdown(f"  ⚠️ {s}")
-
-        with col_run:
-            st.markdown("#### 🚀 Run Auto-Plan")
-            st.caption("Click below any time to auto-plan all pending stores on next month's Sundays.")
-            confirm = st.checkbox("✅ I confirm: auto-plan all pending stores on next month's Sundays", key="autoplan_confirm")
-            if st.button("🤖 Run Auto-Plan Now", use_container_width=True, key="autoplan_run", disabled=not confirm):
-                with st.spinner("🔄 Auto-planning pending stores…"):
-                    result = auto_plan_pending_stores_all_employees(dry_run=False)
-                if "error" in result:
-                    st.error(result["error"])
-                else:
-                    total_planned = sum(len(v["planned"]) for v in result.values())
-                    total_skipped = sum(len(v["skipped"]) for v in result.values())
-                    st.success(f"🎉 Done! {total_planned} stores auto-planned across next month's Sundays. {total_skipped} skipped.")
-                    for ec, data in result.items():
-                        if data["planned"] or data["skipped"]:
-                            with st.expander(f"👤 {data['name']} ({ec}) — {len(data['planned'])} planned"):
-                                for p in data["planned"]:
-                                    st.markdown(f"  ✅ {p}")
-                                for s in data["skipped"]:
-                                    st.markdown(f"  ⚠️ Skipped: {s}")
-                    st.rerun()
-
-    # ── REFRESH ──
-    elif admin_menu == "🔄 Refresh Data":
-        st.info("Syncs latest data from Supabase.")
-        if st.button("🔄 Refresh Now", type="primary", use_container_width=True):
-            st.session_state.employee_df = load_from_supabase("employee_master", EMP_COLS)
-            st.session_state.gst_df      = load_from_supabase("gst_master",      GST_COLS)
-            st.session_state.planned_df  = load_from_supabase("planned_visits",  PLAN_COLS, keep_id=True)
-            st.session_state.admin_df    = load_from_supabase("admin_master",    ADMIN_COLS)
-            st.success("✅ Refreshed!"); st.rerun()
-
-# ====================== EMPLOYEE / ASM PANEL ======================
-else:
-    emp_code = st.session_state.emp_code
-    emp_name = st.session_state.emp_name
-    is_asm   = st.session_state.get("is_asm", False)
-
-    role_label = "🧭 Area Sales Manager" if is_asm else "👤 Employee"
-    st.markdown(f"<h1 class='main-header'>{role_label} — {emp_name}</h1>", unsafe_allow_html=True)
-    st.markdown(
-        "<p class='sub-header'>Your Beat Planning Dashboard"
-        + (" &nbsp;|&nbsp; GST Number not required for ASM stores" if is_asm else "")
-        + "</p>",
-        unsafe_allow_html=True
-    )
-
-    # ── Next-month calendar notice ──
-    first_day, last_day = get_next_month_range()
-    sundays = get_next_month_sundays()
-    sun_strs = ", ".join([s.strftime("%d %b '%y") for s in sundays])
-    st.markdown(f"""
-        <div class='info-banner'>
-            📅 <strong>Planning is open for next month only:</strong>
-            {first_day.strftime('%d %b %Y')} – {last_day.strftime('%d %b %Y')} &nbsp;|&nbsp;
-            🗓️ Sundays: {sun_strs} &nbsp;|&nbsp;
-            📌 Every planned date needs <strong>{MIN_VISITS_PER_DAY}–{MAX_VISITS_PER_DAY} stores</strong>,
-            and the same store can't be planned twice for the same date.
-        </div>""", unsafe_allow_html=True)
-
-    pending_all = get_pending_stores_for_employee(emp_code)
-    render_pending_marquee(pending_all)
-
-    if not pending_all.empty:
-        with st.expander(f"📦 Quick Plan a Never-Planned Store ({len(pending_all)} available)", expanded=False):
-            store_options = {
-                f"{r.get('StoreName','—')} — {r.get('City','—')} ({r.get('StoreID','—')})": r.get("StoreID", "")
-                for _, r in pending_all.iterrows()
-            }
-            colA, colB, colC = st.columns([3, 2, 1])
-            with colA:
-                sel_label = st.selectbox("Select store", list(store_options.keys()), key="marquee_quick_store")
-            with colB:
-                # RESTRICTED to next month only
-                marquee_plan_date = next_month_date_input("📅 Plan for date", key="marquee_plan_date")
-            with colC:
-                st.markdown("<br>", unsafe_allow_html=True)
-                confirm_clicked = st.button("✅ Plan It", key="marquee_confirm", use_container_width=True)
-
-            if confirm_clicked:
-                sel_sid = store_options.get(sel_label)
-                match_row = pending_all[safe_col(pending_all, "StoreID").astype(str) == str(sel_sid)]
-                if match_row.empty:
-                    st.error("❌ Store not found. Refresh and try again.")
-                else:
-                    row = match_row.iloc[0]
-                    day_count = get_day_visit_count(emp_code, marquee_plan_date)
-
-                    if day_count >= MAX_VISITS_PER_DAY:
-                        st.error(f"🚫 {marquee_plan_date.strftime('%d %b %Y')} already has {MAX_VISITS_PER_DAY} stores planned. Pick another date.")
-                    elif is_duplicate_plan(emp_code, sel_sid, marquee_plan_date):
-                        st.error(f"🚫 This store is already planned for {marquee_plan_date.strftime('%d %b %Y')}. A store can't be planned twice on the same date.")
-                    else:
-                        new_record = {
-                            "EmployeeCode": emp_code,
-                            "EmployeeName": emp_name,
-                            "City":         row.get("City", ""),
-                            "Store":        row.get("StoreName", ""),
-                            "StoreID":      row.get("StoreID", ""),
-                            "GSTNumber":    row.get("GSTNumber", ""),
-                            "VisitDate":    marquee_plan_date,
-                        }
-                        new_id = insert_planned_visit(new_record)
-                        if new_id is not None:
-                            new_record["id"] = new_id
-                            new_record["VisitDate"] = marquee_plan_date
-                            st.session_state.planned_df = pd.concat(
-                                [st.session_state.planned_df, pd.DataFrame([new_record])],
-                                ignore_index=True
-                            )
-                            new_count = day_count + 1
-                            st.success(f"✅ {row.get('StoreName','')} planned for {marquee_plan_date.strftime('%d %b %Y')}!")
-                            if new_count < MIN_VISITS_PER_DAY:
-                                st.warning(f"⚠️ {marquee_plan_date.strftime('%d %b %Y')} now has {new_count}/{MIN_VISITS_PER_DAY} store(s) — add {MIN_VISITS_PER_DAY - new_count} more to meet the daily minimum.")
-                            st.rerun()
-
-    employee_stores = st.session_state.gst_df[
-        safe_col(st.session_state.gst_df, "EmployeeCode").astype(str) == str(emp_code)
-    ] if not st.session_state.gst_df.empty else pd.DataFrame(columns=GST_COLS)
-
-    emp_menu = st.sidebar.radio(
-        "Navigation",
-        ["🎯 New Beat Plan", "📦 Pending Stores", "📅 My Plans", "📆 Upcoming Plans", "📊 Analytics", "➕ Request New Store"],
-    )
-
-    # ── NEW BEAT PLAN ──
-    if emp_menu == "🎯 New Beat Plan":
-        if employee_stores.empty:
-            st.warning("⚠️ No stores assigned. Contact Admin.")
-            st.stop()
-
-        c1, c2, c3 = st.columns(3)
-        with c1:
-            # RESTRICTED: only next month's dates
-            visit_date = next_month_date_input("📅 Date (Next Month Only)", key="beat_date")
-        with c2:
-            city_opts  = sorted(safe_col(employee_stores, "City").dropna().unique().tolist())
-            sel_cities = st.multiselect("🌍 Cities (max 3)", city_opts, max_selections=3, key="city_ms")
-        with c3:
-            st.markdown("<br>", unsafe_allow_html=True)
-            if st.button("🔍 Load Stores", use_container_width=True):
-                st.session_state.selected_cities = sel_cities
-
-        # Validate the selected date is in next month (safety check)
-        if not (first_day <= visit_date <= last_day):
-            st.error(f"🚫 Please select a date within next month ({first_day.strftime('%d %b')} – {last_day.strftime('%d %b %Y')}).")
-            st.stop()
-
-        daily_plans = st.session_state.planned_df[
-            (safe_col(st.session_state.planned_df, "EmployeeCode").astype(str) == str(emp_code)) &
-            (st.session_state.planned_df["VisitDate"] == visit_date)
-        ] if "VisitDate" in st.session_state.planned_df.columns else pd.DataFrame(columns=PLAN_COLS)
-
-        pc   = len(daily_plans)
-        pcol = get_progress_color(pc, MAX_VISITS_PER_DAY, MIN_VISITS_PER_DAY)
-
-        if pc >= MAX_VISITS_PER_DAY:
-            progress_note = f"🚫 Maximum {MAX_VISITS_PER_DAY} stores reached."
-        elif pc < MIN_VISITS_PER_DAY:
-            progress_note = f"⚠️ Minimum {MIN_VISITS_PER_DAY} required — add {MIN_VISITS_PER_DAY - pc} more store(s) for this date."
-        else:
-            progress_note = f"✅ {MAX_VISITS_PER_DAY - pc} more store(s) can be added for this date."
-
-        st.markdown(f"""
-            <div class='progress-wrap'>
-                <div style='display:flex;justify-content:space-between;'>
-                    <span class='progress-label'>Daily Progress — {visit_date.strftime('%d %b %Y')} ({visit_date.strftime('%A')})</span>
-                    <span style='font-weight:800;color:{pcol};font-size:18px;'>{pc}/{MAX_VISITS_PER_DAY} <span style='font-size:12px;color:#94a3b8;font-weight:600;'>(min {MIN_VISITS_PER_DAY})</span></span>
-                </div>
-                <div class='progress-track'>
-                    <div class='progress-fill' style='width:{min(pc*10,100)}%;background:{pcol};'></div>
-                </div>
-                <div style='font-size:13px;color:#64748b;'>
-                    {progress_note}
-                </div>
-            </div>""", unsafe_allow_html=True)
-
-        search_query = st.text_input("🔍 Search stores by name, city or GST…", key="store_search", placeholder="e.g. Sharma Medical, Lucknow, 09AAA…")
-
-        show_cities = st.session_state.selected_cities or safe_col(employee_stores, "City").unique().tolist()
-        city_stores = employee_stores[safe_col(employee_stores, "City").isin(show_cities)]
-        planned_ids = safe_col(daily_plans, "StoreID").tolist()
-        available   = city_stores[~safe_col(city_stores, "StoreID").isin(planned_ids)]
-
-        if search_query.strip():
-            q = search_query.strip().lower()
-            mask = (
-                safe_col(available, "StoreName").str.lower().str.contains(q, na=False) |
-                safe_col(available, "City").str.lower().str.contains(q, na=False) |
-                safe_col(available, "GSTNumber").str.lower().str.contains(q, na=False)
-            )
-            available = available[mask]
-
-        if not daily_plans.empty:
-            with st.expander(f"✅ Planned stores for {visit_date.strftime('%d %b %Y')} ({pc})"):
-                show = [c for c in ["Store","City","GSTNumber"] if c in daily_plans.columns]
-                st.dataframe(daily_plans[show], use_container_width=True, hide_index=True)
-
-        if pc < MAX_VISITS_PER_DAY:
-            section_header("🏪", f"Available Stores ({len(available)})")
-            if available.empty:
-                st.info("No stores found. Try a different search or city.")
-            else:
-                for idx, row in available.iterrows():
-                    col1, col2 = st.columns([5, 1])
-                    with col1:
-                        st.markdown(f"""
-                            <div class='store-card'>
-                                <div class='store-name'>🏪 {row.get('StoreName','—')}</div>
-                                <div class='store-meta'>
-                                    <span class='store-chip'>📍 {row.get('City','—')}</span>
-                                    <span class='store-chip'>🪪 {row.get('StoreID','—')}</span>
-                                    {gst_chip_html(row)}
-                                </div>
-                            </div>""", unsafe_allow_html=True)
-                    with col2:
-                        st.markdown("<br><br>", unsafe_allow_html=True)
-                        if st.button("➕ Add", key=f"add_{idx}_{visit_date}"):
-                            store_id = row.get("StoreID", "")
-                            current_count = get_day_visit_count(emp_code, visit_date)
-                            if current_count >= MAX_VISITS_PER_DAY:
-                                st.error(f"🚫 {visit_date.strftime('%d %b %Y')} already has {MAX_VISITS_PER_DAY} stores planned.")
-                            elif is_duplicate_plan(emp_code, store_id, visit_date):
-                                st.error(f"🚫 {row.get('StoreName','')} is already planned for {visit_date.strftime('%d %b %Y')}. A store can't be planned twice on the same date.")
-                            else:
-                                new_record = {
-                                    "EmployeeCode": emp_code,
-                                    "EmployeeName": emp_name,
-                                    "City":         row.get("City", ""),
-                                    "Store":        row.get("StoreName", ""),
-                                    "StoreID":      store_id,
-                                    "GSTNumber":    row.get("GSTNumber", ""),
-                                    "VisitDate":    visit_date,
-                                }
-                                new_id = insert_planned_visit(new_record)
-                                if new_id is not None:
-                                    new_record["id"] = new_id
-                                    new_record["VisitDate"] = visit_date
-                                    st.session_state.planned_df = pd.concat(
-                                        [st.session_state.planned_df, pd.DataFrame([new_record])],
-                                        ignore_index=True
-                                    )
-                                    st.success(f"✅ {row.get('StoreName','')} added!")
-                                    st.rerun()
-
-        st.markdown("---")
-        emp_plans = st.session_state.planned_df[
-            safe_col(st.session_state.planned_df, "EmployeeCode").astype(str) == str(emp_code)]
-        download_beat_plan_button(emp_plans, "emp_dl", f"Beat_Plan_{emp_code}")
-
-    # ── PENDING STORES (never planned) ──
-    elif emp_menu == "📦 Pending Stores":
-        st.markdown("### 📦 Pending Stores")
-        st.caption("ℹ️ Stores assigned to you that have not been included in ANY beat plan yet (all-time). GST may be blank for ASM stores.")
-
-        pend_stores = get_pending_stores_for_employee(emp_code)
-
-        c1, c2 = st.columns(2)
-        with c1:
-            st.markdown(f"""
-                <div class='metric-card blue'>
-                    <div class='metric-icon'>🏪</div>
-                    <div class='metric-label'>Total Assigned Stores</div>
-                    <div class='metric-value'>{len(employee_stores)}</div>
-                </div>""", unsafe_allow_html=True)
-        with c2:
-            st.markdown(f"""
-                <div class='metric-card red'>
-                    <div class='metric-icon'>📦</div>
-                    <div class='metric-label'>Never Planned</div>
-                    <div class='metric-value'>{len(pend_stores)}</div>
-                </div>""", unsafe_allow_html=True)
-
-        st.markdown("---")
-
-        if pend_stores.empty:
-            st.success("🎉 You've planned every assigned store at least once!")
-        else:
-            col_search, col_date = st.columns([3, 2])
-            with col_search:
-                search_q = st.text_input("🔍 Search pending stores…", key="pend_store_search", placeholder="Store name, city, GST…")
-            with col_date:
-                # RESTRICTED: only next month's dates
-                plan_for_date = next_month_date_input("📅 Plan for date (Next Month)", key="pend_store_plan_date")
-
-            view_df = pend_stores.copy()
-            if search_q.strip():
-                q = search_q.strip().lower()
-                mask = (
-                    safe_col(view_df, "StoreName").str.lower().str.contains(q, na=False) |
-                    safe_col(view_df, "City").str.lower().str.contains(q, na=False) |
-                    safe_col(view_df, "GSTNumber").str.lower().str.contains(q, na=False)
-                )
-                view_df = view_df[mask]
-
-            existing_count = get_day_visit_count(emp_code, plan_for_date)
-            slots_left = MAX_VISITS_PER_DAY - existing_count
-
-            section_header("📦", f"Never-Planned Stores ({len(view_df)})")
-            min_note = f" ⚠️ Needs {MIN_VISITS_PER_DAY - existing_count} more to hit the daily minimum of {MIN_VISITS_PER_DAY}." if existing_count < MIN_VISITS_PER_DAY else ""
-            st.caption(f"📅 Adding to **{plan_for_date.strftime('%A, %d %b %Y')}** — {max(slots_left,0)} slot(s) left that day (min {MIN_VISITS_PER_DAY}, max {MAX_VISITS_PER_DAY}/day).{min_note}")
-
-            for idx, row in view_df.iterrows():
-                col1, col2 = st.columns([5, 1])
-                with col1:
-                    st.markdown(f"""
-                        <div class='store-card'>
-                            <div class='store-name'>🏪 {row.get('StoreName','—')}</div>
-                            <div class='store-meta'>
-                                <span class='store-chip'>📍 {row.get('City','—')}</span>
-                                <span class='store-chip'>🪪 {row.get('StoreID','—')}</span>
-                                {gst_chip_html(row)}
-                            </div>
-                        </div>""", unsafe_allow_html=True)
-                with col2:
-                    st.markdown("<br><br>", unsafe_allow_html=True)
-                    if slots_left <= 0:
-                        st.button("🚫 Full", key=f"plan_pending_{idx}", disabled=True)
-                    elif st.button("➕ Plan", key=f"plan_pending_{idx}"):
-                        store_id = row.get("StoreID", "")
-                        if is_duplicate_plan(emp_code, store_id, plan_for_date):
-                            st.error(f"🚫 {row.get('StoreName','')} is already planned for {plan_for_date.strftime('%d %b %Y')}.")
-                        else:
-                            new_record = {
-                                "EmployeeCode": emp_code,
-                                "EmployeeName": emp_name,
-                                "City":         row.get("City", ""),
-                                "Store":        row.get("StoreName", ""),
-                                "StoreID":      store_id,
-                                "GSTNumber":    row.get("GSTNumber", ""),
-                                "VisitDate":    plan_for_date,
-                            }
-                            new_id = insert_planned_visit(new_record)
-                            if new_id is not None:
-                                new_record["id"] = new_id
-                                new_record["VisitDate"] = plan_for_date
-                                st.session_state.planned_df = pd.concat(
-                                    [st.session_state.planned_df, pd.DataFrame([new_record])],
-                                    ignore_index=True
-                                )
-                                st.success(f"✅ {row.get('StoreName','')} added to {plan_for_date.strftime('%d %b %Y')}!")
-                                st.rerun()
-
-            st.markdown("---")
-            download_pending_stores_button(pend_stores, "emp_pend_store_dl", f"Pending_Stores_{emp_code}")
-
-    # ── MY PLANS (with delete) ──
-    elif emp_menu == "📅 My Plans":
-        my = st.session_state.planned_df[
-            safe_col(st.session_state.planned_df, "EmployeeCode").astype(str) == str(emp_code)].copy()
-
-        if my.empty:
-            st.info("No plans yet.")
-        else:
-            c1, c2, c3 = st.columns(3)
-            with c1: st.metric("Total Plans",  len(my))
-            with c2: st.metric("Cities",       safe_col(my, "City").nunique())
-            with c3: st.metric("Unique Dates", len(safe_col(my, "VisitDate").unique()))
-
-            st.markdown("---")
-
-            col_f1, col_f2 = st.columns(2)
-            with col_f1:
-                del_search = st.text_input("🔍 Search my plans…", placeholder="Store name, city…", key="my_plan_search")
-            with col_f2:
-                # Admin can view any date; employees see next month's filter defaulted
-                date_filter = st.date_input("📅 Filter by date", value=first_day, key="my_plan_date")
-                use_date    = st.checkbox("Apply date filter", key="my_plan_use_date")
-
-            filtered = my.copy()
-            if del_search.strip():
-                q = del_search.strip().lower()
-                mask = (
-                    safe_col(filtered, "Store").str.lower().str.contains(q, na=False) |
-                    safe_col(filtered, "City").str.lower().str.contains(q, na=False)
-                )
-                filtered = filtered[mask]
-            if use_date and "VisitDate" in filtered.columns:
-                filtered = filtered[filtered["VisitDate"] == date_filter]
-
-            section_header("📋", f"My Plans ({len(filtered)})")
-            st.caption(f"ℹ️ You can't remove an entry if it would drop a date below the {MIN_VISITS_PER_DAY}-store minimum — clear the whole day instead if you need to start over.")
-
-            if filtered.empty:
-                st.info("No plans match the filter.")
-            else:
-                for i, (idx, row) in enumerate(filtered.iterrows()):
-                    col_info, col_del = st.columns([6, 1])
-                    with col_info:
-                        vd = row.get("VisitDate", "")
-                        vd_str = vd.strftime("%d %b %Y") if hasattr(vd, "strftime") else str(vd)
-                        gst_disp = str(row.get('GSTNumber', '') or '').strip()
-                        gst_line = f" &nbsp;|&nbsp; 🧾 {gst_disp}" if gst_disp and gst_disp.lower() not in ("nan", "none") else ""
-                        st.markdown(f"""
-                            <div class='del-row'>
-                                <div style='font-size:24px;'>🏪</div>
-                                <div class='del-info'>
-                                    <div style='font-weight:700;font-size:15px;'>{row.get('Store','—')}</div>
-                                    <div class='del-date'>📍 {row.get('City','—')}{gst_line} &nbsp;|&nbsp; 📅 {vd_str}</div>
-                                </div>
-                            </div>""", unsafe_allow_html=True)
-                    with col_del:
-                        st.markdown("<br>", unsafe_allow_html=True)
-                        if st.button("🗑️", key=f"del_plan_{idx}_{i}", help="Remove this entry"):
-                            vd = row.get("VisitDate", "")
-                            current_count = get_day_visit_count(emp_code, vd) if vd != "" else 0
-                            resulting_count = current_count - 1
-                            if 0 < resulting_count < MIN_VISITS_PER_DAY:
-                                st.error(
-                                    f"🚫 Can't remove — {vd_str if hasattr(vd,'strftime') else vd} has {current_count} store(s) planned "
-                                    f"and needs a minimum of {MIN_VISITS_PER_DAY}. Delete all {current_count} entries for this "
-                                    f"date together if you want to clear it, or add more stores first."
-                                )
-                            else:
-                                row_id = row.get("id")
-                                if row_id and str(row_id).lower() not in ("", "nan", "none"):
-                                    if delete_planned_visit(row_id):
-                                        st.session_state.planned_df = st.session_state.planned_df.drop(index=idx).reset_index(drop=True)
-                                        st.success("✅ Entry removed.")
-                                        st.rerun()
-                                else:
-                                    st.session_state.planned_df = st.session_state.planned_df.drop(index=idx).reset_index(drop=True)
-                                    st.warning("⚠️ Removed from session. DB row may persist — refresh data to sync.")
-                                    st.rerun()
-
-            st.markdown("---")
-            download_beat_plan_button(my, "my_dl", f"My_Plans_{emp_code}")
-
-    # ── UPCOMING PLANS ──
-    elif emp_menu == "📆 Upcoming Plans":
-        if "VisitDate" not in st.session_state.planned_df.columns:
-            st.info("No upcoming visits.")
-        else:
-            upcoming = st.session_state.planned_df[
-                (safe_col(st.session_state.planned_df, "EmployeeCode").astype(str) == str(emp_code)) &
-                (st.session_state.planned_df["VisitDate"] >= first_day)
-            ].sort_values("VisitDate")
-            if upcoming.empty:
-                st.info(f"No upcoming visits planned for next month ({first_day.strftime('%B %Y')}).")
-            else:
-                for vdate in sorted(upcoming["VisitDate"].unique()):
-                    plans = upcoming[upcoming["VisitDate"] == vdate]
-                    is_sunday = vdate.weekday() == 6
-                    label = "🔵 Sunday" if is_sunday else ""
-                    below_min = len(plans) < MIN_VISITS_PER_DAY
-                    min_flag = f" &nbsp;<span style='color:#ef4444;font-size:12px;font-weight:700;'>⚠️ below {MIN_VISITS_PER_DAY}-store minimum</span>" if below_min else ""
-                    st.markdown(f"""
-                        <div style='background:#f0f9ff;border-left:4px solid #1a56db;
-                             padding:12px 16px;border-radius:10px;margin-bottom:8px;'>
-                            <strong>📅 {vdate.strftime('%A, %d %B %Y')}</strong>
-                            &nbsp;<span style='color:#1a56db;font-size:13px;font-weight:600;'>{label}</span>
-                            &nbsp;— {len(plans)} store(s){min_flag}
-                        </div>""", unsafe_allow_html=True)
-                    for _, p in plans.iterrows():
-                        st.markdown(f"&nbsp;&nbsp;&nbsp;&nbsp;• **{p.get('Store','—')}** — {p.get('City','—')}")
-
-    # ── ANALYTICS ──
-    elif emp_menu == "📊 Analytics":
-        my = st.session_state.planned_df[
-            safe_col(st.session_state.planned_df, "EmployeeCode").astype(str) == str(emp_code)]
-        if my.empty:
-            st.info("No data yet.")
-        else:
-            c1, c2, c3, c4 = st.columns(4)
-            with c1: st.metric("Total Visits", len(my))
-            with c2: st.metric("Cities",       safe_col(my, "City").nunique())
-            with c3: st.metric("Stores",       safe_col(my, "Store").nunique())
-            with c4:
-                nm = my[pd.to_datetime(safe_col(my, "VisitDate"), errors="coerce").dt.month == first_day.month] \
-                    if "VisitDate" in my.columns else pd.DataFrame()
-                st.metric(f"Next Month ({first_day.strftime('%b')})", len(nm))
-            st.markdown("---")
-            c1, c2 = st.columns(2)
-            with c1:
-                st.subheader("Visits by City")
-                if "City" in my.columns: st.bar_chart(my.groupby("City").size())
-            with c2:
-                st.subheader("Visits Over Time")
-                if "VisitDate" in my.columns:
-                    tmp = my.copy()
-                    tmp["Month"] = pd.to_datetime(tmp["VisitDate"], errors="coerce").dt.to_period("M").astype(str)
-                    st.line_chart(tmp.groupby("Month").size())
-
-    # ── REQUEST NEW STORE ──
-    elif emp_menu == "➕ Request New Store":
-        st.subheader("➕ Add New Store")
-        if is_asm:
-            st.caption("ℹ️ As an ASM, GST Number is optional for your stores.")
-        with st.form("store_req"):
-            c1, c2 = st.columns(2)
-            with c1:
-                sname = st.text_input("Store Name*")
-                city  = st.text_input("City*")
-            with c2:
-                gst = st.text_input(f"GST Number{'*' if not is_asm else ' (optional)'}", max_chars=15)
-                _   = st.text_area("Remarks (optional)", height=100)
-            if st.form_submit_button("✅ Add Store", type="primary"):
-                gc = gst.strip().upper()
-                if not sname or not city:
-                    st.error("❌ Store name and city are required!")
-                elif not is_asm and not gc:
-                    st.error("❌ GST Number required!")
-                elif gc and not is_valid_gstin(gc):
-                    st.error("❌ Invalid GST! e.g. 22AAAAA0000A1Z5")
-                elif gc and safe_col(st.session_state.gst_df, "GSTNumber").astype(str).str.upper().eq(gc).any():
-                    st.error("❌ GST exists!")
-                else:
-                    nid = f"S{len(st.session_state.gst_df)+1:05d}"
-                    new_record = {
-                        "StoreID": nid,
-                        "StoreName": sname.strip().title(),
-                        "GSTNumber": gc,  # may be blank for ASM
-                        "City": city.strip().title(),
-                        "EmployeeCode": emp_code,
-                    }
-                    new_id = insert_gst_row(new_record)
-                    if new_id is not None:
-                        new_record["id"] = new_id
-                        st.session_state.gst_df = pd.concat(
-                            [st.session_state.gst_df, pd.DataFrame([new_record])],
-                            ignore_index=True
-                        )
-                        st.success(f"✅ '{sname.title()}' added!")
-                        st.rerun()
-
-# ====================== FOOTER ======================
-st.markdown("---")
-st.caption("Beat Plan Pro © 2026 | 🚀 Created By Bipin Pandey")
+        regions = list(data.get("perRegion", {}).keys()) or [r["Region"] for r in data.get("region", [])]
+        for region in regions:
+            try:
+                summaries[region] = build_summary(data, region)
+            except Exception as exc:  # noqa: BLE001
+                st.error(f"**{f.name} / {region}**: could not read data ({exc})")
+
+    if not summaries:
+        return
+
+    ordered = sorted(summaries.values(), key=lambda s: s["region"])
+    labels = [s["region"] for s in ordered]
+    if len(ordered) > 1:
+        labels.append("All regions")
+    tabs = st.tabs(labels)
+
+    for tab, s in zip(tabs, ordered):
+        with tab:
+            kpi_row(s)
+            render_mail_block(f"{s['region']}_{audience[:3]}", subject_for(s, cfg), build_mail(s, cfg))
+
+    if len(ordered) > 1:
+        with tabs[-1]:
+            tot_t = sum(s["target"] for s in ordered)
+            tot_a = sum(s["achieved"] for s in ordered)
+            kpi_row({"target": tot_t, "achieved": tot_a, "ach_pct": tot_a / tot_t * 100 if tot_t else 0,
+                     "above_n": sum(s["above_n"] for s in ordered), "reps_n": sum(s["reps_n"] for s in ordered)})
+            period = ordered[0]["period"]
+            subj = (f"{short(cfg)} × {cfg['program']} | All Regions – {period} Performance: {pct(tot_a / tot_t * 100)} Target Achievement"
+                    if audience.startswith("Client") else f"{period} Results – All Regions at {pct(tot_a / tot_t * 100)} of Target")
+            render_mail_block(f"All_{audience[:3]}", subj, combined_mail(ordered, cfg))
+
+    st.caption("Numbers come straight from the uploaded dashboards. Please review the mail and add your own context before sending.")
+
+
+if __name__ == "__main__":
+    main()
