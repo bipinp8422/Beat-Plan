@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 from datetime import date, timedelta
+import calendar
 import re
 import io
 from supabase import create_client, Client
@@ -14,14 +15,26 @@ st.set_page_config(
 )
 
 # ====================== SUPABASE CONFIG ======================
-SUPABASE_URL = "https://kueicdruccvbempjvxzn.supabase.co"
-SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imt1ZWljZHJ1Y2N2YmVtcGp2eHpuIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODExMjE0MTcsImV4cCI6MjA5NjY5NzQxN30.aWkQ85Wq-iP2Gp1W1dfoATdRhR0rFcc1H6CGtK_zDE0"
+# Prefers Streamlit secrets (.streamlit/secrets.toml with SUPABASE_URL / SUPABASE_KEY).
+# Falls back to the values below so the app keeps working unchanged.
+_FALLBACK_URL = "https://kueicdruccvbempjvxzn.supabase.co"
+_FALLBACK_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imt1ZWljZHJ1Y2N2YmVtcGp2eHpuIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODExMjE0MTcsImV4cCI6MjA5NjY5NzQxN30.aWkQ85Wq-iP2Gp1W1dfoATdRhR0rFcc1H6CGtK_zDE0"
+try:
+    SUPABASE_URL = st.secrets.get("SUPABASE_URL", _FALLBACK_URL)
+    SUPABASE_KEY = st.secrets.get("SUPABASE_KEY", _FALLBACK_KEY)
+except Exception:
+    SUPABASE_URL, SUPABASE_KEY = _FALLBACK_URL, _FALLBACK_KEY
 
 try:
     supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 except Exception as e:
     st.error(f"❌ Failed to connect to Supabase: {e}")
     st.stop()
+
+# ====================== BUSINESS RULES ======================
+MIN_VISITS_PER_DAY = 3      # a day with fewer visits is NOT considered submitted
+MAX_VISITS_PER_DAY = 10
+SKIP_SUNDAYS = False        # set True if Sundays don't need a plan
 
 # ====================== STYLING ======================
 st.markdown("""
@@ -372,6 +385,43 @@ def get_progress_color(current, max_val):
 def safe_col(df, col):
     return df[col] if col in df.columns else pd.Series([""] * len(df))
 
+# ---------- Month / minimum-visit rules ----------
+def get_required_days(year, month):
+    last = calendar.monthrange(year, month)[1]
+    days = [date(year, month, d) for d in range(1, last + 1)]
+    if SKIP_SUNDAYS:
+        days = [d for d in days if d.weekday() != 6]
+    return days
+
+def get_month_compliance(emp_code, year, month):
+    plan_df = st.session_state.planned_df
+    counts = {}
+    if not plan_df.empty and "VisitDate" in plan_df.columns:
+        mine = plan_df[safe_col(plan_df, "EmployeeCode").astype(str) == str(emp_code)]
+        counts = mine["VisitDate"].value_counts().to_dict()
+    rows = []
+    for d in get_required_days(year, month):
+        c = int(counts.get(d, 0))
+        if c >= MIN_VISITS_PER_DAY:
+            status = "✅ Complete"
+        elif c > 0:
+            status = "⚠️ Incomplete"
+        else:
+            status = "❌ Missing"
+        rows.append({"Date": d, "Day": d.strftime("%a"), "Visits": c, "Status": status})
+    return pd.DataFrame(rows, columns=["Date", "Day", "Visits", "Status"])
+
+def month_summary(comp_df):
+    total = len(comp_df)
+    ok = int((comp_df["Visits"] >= MIN_VISITS_PER_DAY).sum()) if total else 0
+    return ok, total
+
+def status_message(partial):
+    if partial:
+        return f"Only {partial} store(s) — minimum {MIN_VISITS_PER_DAY} required"
+    return "No record found in database"
+
+# ---------- Pending stores ----------
 def get_pending_stores_for_employee(emp_code):
     gst_df = st.session_state.gst_df
     plan_df = st.session_state.planned_df
@@ -558,10 +608,9 @@ def fetch_emp_plans_live(emp_code, sel_date):
 # ====================== BEAT PLAN PIVOT BUILDER ======================
 def build_beat_plan_pivot(fp_df):
     """
-    Builds a pivot exactly like the portal export:
     rows = EmployeeCode, EmployeeName, GSTNumber, Store, City, StoreID
     columns = one column per VisitDate (1 if planned that day, else 0)
-    plus a 'Grand Total' column = sum across all date columns.
+    plus a 'Grand Total' column.
     """
     pivot_index = [c for c in ["EmployeeCode", "EmployeeName", "GSTNumber", "Store", "City", "StoreID"] if c in fp_df.columns]
     if not pivot_index or "VisitDate" not in fp_df.columns:
@@ -584,7 +633,6 @@ def build_beat_plan_pivot(fp_df):
     pivot.columns = [c.strftime("%Y-%m-%d") for c in pivot.columns]
     pivot["Grand Total"] = pivot.sum(axis=1)
     pivot = pivot.reset_index()
-    # reorder index columns to match the standard layout
     ordered_front = [c for c in ["EmployeeCode", "EmployeeName", "GSTNumber", "Store", "City", "StoreID"] if c in pivot.columns]
     other_cols = [c for c in pivot.columns if c not in ordered_front]
     pivot = pivot[ordered_front + other_cols]
@@ -662,7 +710,8 @@ if st.session_state.role == "admin":
 
     admin_menu = st.sidebar.radio(
         "Navigation",
-        ["📊 Dashboard", "📋 Beat Plan Status", "👥 Manage Employees", "🏪 Manage Stores", "📋 View Plans", "🔄 Refresh Data"],
+        ["📊 Dashboard", "📋 Beat Plan Status", "🗓️ Month Compliance", "👥 Manage Employees",
+         "🏪 Manage Stores", "📋 View Plans", "🔄 Refresh Data"],
     )
 
     # ── DASHBOARD ──
@@ -673,7 +722,8 @@ if st.session_state.role == "admin":
         with st.spinner("🔄 Checking today's beat plan status from database…"):
             live_status = fetch_beat_status_live(date.today())
 
-        today_emp_codes    = set(live_status.keys())
+        # Done = at least MIN_VISITS_PER_DAY visits today
+        today_emp_codes    = {k for k, v in live_status.items() if v >= MIN_VISITS_PER_DAY}
         total_emp          = len(emp_df)
         done_count         = len(today_emp_codes)
         pending_count      = total_emp - done_count
@@ -684,8 +734,8 @@ if st.session_state.role == "admin":
             ("blue",   "👥", "Total Employees", total_emp,          "Active accounts"),
             ("green",  "🏪", "Total Stores",    len(st.session_state.gst_df), "In database"),
             ("purple", "📋", "Total Plans",     len(plan_df),       "All time"),
-            ("green",  "✅", "Done Today",      done_count,         "Beat plan submitted"),
-            ("red",    "⏳", "Pending Today",   pending_count,      "Yet to submit"),
+            ("green",  "✅", "Done Today",      done_count,         f"{MIN_VISITS_PER_DAY}+ visits submitted"),
+            ("red",    "⏳", "Pending Today",   pending_count,      f"Under {MIN_VISITS_PER_DAY} visits"),
         ]
         for col, (color, icon, label, val, sub) in zip(cols, cards):
             with col:
@@ -703,7 +753,7 @@ if st.session_state.role == "admin":
         with col_done:
             section_header("✅", f"Done — {date.today().strftime('%d %b %Y')} ({done_count})")
             if not today_emp_codes:
-                st.info("No submissions yet today.")
+                st.info("No complete submissions yet today.")
             else:
                 done_emps = emp_df[emp_df["EmployeeCode"].astype(str).isin(today_emp_codes)] \
                     if "EmployeeCode" in emp_df.columns else pd.DataFrame()
@@ -735,13 +785,14 @@ if st.session_state.role == "admin":
                         ec = str(row.get("EmployeeCode", ""))
                         en = row.get("EmployeeName", ec)
                         initials = "".join([w[0] for w in en.split()[:2]]).upper()
+                        msg = status_message(live_status.get(ec, 0))
                         st.markdown(f"""
                             <div class='emp-card'>
                                 <div class='emp-avatar pending'>{initials}</div>
                                 <div class='emp-info'>
                                     <div class='emp-name'>{en}</div>
                                     <div class='emp-code'>{ec}</div>
-                                    <div class='emp-count'>No record found in database</div>
+                                    <div class='emp-count'>{msg}</div>
                                 </div>
                                 <div class='emp-badge badge-pending'>⏳ Pending</div>
                             </div>""", unsafe_allow_html=True)
@@ -762,7 +813,6 @@ if st.session_state.role == "admin":
                 summary_rows.append({"EmployeeCode": ec, "EmployeeName": en, "PendingStores": len(pend_stores)})
                 if not pend_stores.empty:
                     tagged = pend_stores.copy()
-                    # ── FIX: check before inserting to avoid "column already exists" error ──
                     if "EmployeeCode" not in tagged.columns:
                         tagged.insert(0, "EmployeeCode", ec)
                     else:
@@ -830,7 +880,7 @@ if st.session_state.role == "admin":
     # ── BEAT PLAN STATUS ──
     elif admin_menu == "📋 Beat Plan Status":
         st.markdown("### 📋 Beat Plan Status")
-        st.caption("ℹ️ Status is fetched live from the database every time you change the date.")
+        st.caption(f"ℹ️ Status is fetched live from the database. An employee is 'Done' only with {MIN_VISITS_PER_DAY}+ visits on the date.")
 
         emp_df   = st.session_state.employee_df
         sel_date = st.date_input("📅 Select Date", value=date.today())
@@ -838,7 +888,7 @@ if st.session_state.role == "admin":
         with st.spinner(f"🔄 Querying database for {sel_date.strftime('%d %b %Y')}…"):
             live_status = fetch_beat_status_live(sel_date)
 
-        date_emp_codes = set(live_status.keys())
+        date_emp_codes = {k for k, v in live_status.items() if v >= MIN_VISITS_PER_DAY}
         done_n    = len(date_emp_codes)
         pending_n = len(emp_df) - done_n
 
@@ -856,7 +906,7 @@ if st.session_state.role == "admin":
                     <div class='metric-icon'>✅</div>
                     <div class='metric-label'>Submitted</div>
                     <div class='metric-value'>{done_n}</div>
-                    <div class='metric-sub'>Records found in DB</div>
+                    <div class='metric-sub'>{MIN_VISITS_PER_DAY}+ visits in DB</div>
                 </div>""", unsafe_allow_html=True)
         with c3:
             st.markdown(f"""
@@ -864,7 +914,7 @@ if st.session_state.role == "admin":
                     <div class='metric-icon'>⏳</div>
                     <div class='metric-label'>Pending</div>
                     <div class='metric-value'>{pending_n}</div>
-                    <div class='metric-sub'>No record in DB</div>
+                    <div class='metric-sub'>Missing or under {MIN_VISITS_PER_DAY}</div>
                 </div>""", unsafe_allow_html=True)
 
         st.markdown("---")
@@ -876,7 +926,7 @@ if st.session_state.role == "admin":
 
         with tab_done:
             if not date_emp_codes:
-                st.info(f"No beat plans found in database for {sel_date.strftime('%d %b %Y')}.")
+                st.info(f"No complete beat plans found for {sel_date.strftime('%d %b %Y')}.")
             else:
                 done_emps = emp_df[emp_df["EmployeeCode"].astype(str).isin(date_emp_codes)] \
                     if "EmployeeCode" in emp_df.columns else pd.DataFrame()
@@ -906,16 +956,74 @@ if st.session_state.role == "admin":
                         ec = str(row.get("EmployeeCode", ""))
                         en = row.get("EmployeeName", ec)
                         initials = "".join([w[0] for w in en.split()[:2]]).upper()
+                        msg = status_message(live_status.get(ec, 0))
                         st.markdown(f"""
                             <div class='emp-card'>
                                 <div class='emp-avatar pending'>{initials}</div>
                                 <div class='emp-info'>
                                     <div class='emp-name'>{en}</div>
                                     <div class='emp-code'>{ec}</div>
-                                    <div class='emp-count'>No record found in database for this date</div>
+                                    <div class='emp-count'>{msg}</div>
                                 </div>
                                 <div class='emp-badge badge-pending'>⏳ Pending</div>
                             </div>""", unsafe_allow_html=True)
+
+    # ── MONTH COMPLIANCE ──
+    elif admin_menu == "🗓️ Month Compliance":
+        st.markdown("### 🗓️ Month Compliance")
+        st.caption(f"ℹ️ Every day of the month needs at least {MIN_VISITS_PER_DAY} visits"
+                   f"{' (Sundays excluded)' if SKIP_SUNDAYS else ''}. Uses data loaded in session — use 🔄 Refresh Data for the latest.")
+        c1, c2 = st.columns(2)
+        with c1:
+            yr = st.number_input("Year", 2024, 2100, date.today().year, key="mc_year")
+        with c2:
+            mn = st.selectbox("Month", list(range(1, 13)), index=date.today().month - 1,
+                              format_func=lambda m: calendar.month_name[m], key="mc_month")
+
+        rows = []
+        for _, e in st.session_state.employee_df.iterrows():
+            ec = str(e.get("EmployeeCode", ""))
+            comp = get_month_compliance(ec, int(yr), int(mn))
+            ok, total = month_summary(comp)
+            rows.append({
+                "EmployeeCode": ec,
+                "EmployeeName": e.get("EmployeeName", ec),
+                "Required Days": total,
+                "Complete Days": ok,
+                f"Incomplete (<{MIN_VISITS_PER_DAY})": int(((comp["Visits"] > 0) & (comp["Visits"] < MIN_VISITS_PER_DAY)).sum()),
+                "Missing Days": int((comp["Visits"] == 0).sum()),
+                "Compliant": "✅" if total and ok == total else "❌",
+            })
+        if not rows:
+            st.info("No employees found.")
+        else:
+            res_df = pd.DataFrame(rows)
+            st.dataframe(res_df, use_container_width=True, hide_index=True)
+
+            output = io.BytesIO()
+            with pd.ExcelWriter(output, engine="openpyxl") as writer:
+                res_df.to_excel(writer, index=False, sheet_name="Month Compliance")
+            output.seek(0)
+            st.download_button(
+                label="📥 Download Compliance Report (Excel)",
+                data=output.getvalue(),
+                file_name=f"Month_Compliance_{int(yr)}_{int(mn):02d}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True,
+                key="mc_dl",
+            )
+
+            st.markdown("#### 🔎 Day-wise detail")
+            emp_choices = [f"{r['EmployeeName']} ({r['EmployeeCode']})" for r in rows]
+            pick = st.selectbox("Employee", emp_choices, key="mc_emp_pick")
+            pick_code = rows[emp_choices.index(pick)]["EmployeeCode"]
+            detail = get_month_compliance(pick_code, int(yr), int(mn))
+            only_gaps = st.checkbox("Show only days that need attention", value=True, key="mc_gaps")
+            view = detail[detail["Visits"] < MIN_VISITS_PER_DAY] if only_gaps else detail
+            if view.empty:
+                st.success("✅ All days are complete.")
+            else:
+                st.dataframe(view, use_container_width=True, hide_index=True)
 
     # ── MANAGE EMPLOYEES ──
     elif admin_menu == "👥 Manage Employees":
@@ -1091,6 +1199,16 @@ else:
     pending_all = get_pending_stores_for_employee(emp_code)
     render_pending_marquee(pending_all)
 
+    # ---- Month compliance banner ----
+    _today = date.today()
+    _comp = get_month_compliance(emp_code, _today.year, _today.month)
+    _ok, _total = month_summary(_comp)
+    if _ok < _total:
+        st.warning(f"📅 {calendar.month_name[_today.month]}: {_ok}/{_total} days complete. "
+                   f"Each day needs at least {MIN_VISITS_PER_DAY} visits. Open **🗓️ Month Plan** to see what's missing.")
+    else:
+        st.success(f"🎉 {calendar.month_name[_today.month]} plan is complete for all days!")
+
     if not pending_all.empty:
         with st.expander(f"📦 Quick Plan a Never-Planned Store ({len(pending_all)} available)", expanded=False):
             store_options = {
@@ -1118,8 +1236,8 @@ else:
                         (st.session_state.planned_df["VisitDate"] == marquee_plan_date)
                     ]) if "VisitDate" in st.session_state.planned_df.columns else 0
 
-                    if day_count >= 10:
-                        st.error(f"🚫 {marquee_plan_date.strftime('%d %b %Y')} already has 10 stores planned. Pick another date.")
+                    if day_count >= MAX_VISITS_PER_DAY:
+                        st.error(f"🚫 {marquee_plan_date.strftime('%d %b %Y')} already has {MAX_VISITS_PER_DAY} stores planned. Pick another date.")
                     else:
                         new_record = {
                             "EmployeeCode": emp_code,
@@ -1147,7 +1265,8 @@ else:
 
     emp_menu = st.sidebar.radio(
         "Navigation",
-        ["🎯 New Beat Plan", "📦 Pending Stores", "📅 My Plans", "📆 Upcoming Plans", "📊 Analytics", "➕ Request New Store"],
+        ["🎯 New Beat Plan", "🗓️ Month Plan", "📦 Pending Stores", "📅 My Plans",
+         "📆 Upcoming Plans", "📊 Analytics", "➕ Request New Store"],
     )
 
     # ── NEW BEAT PLAN ──
@@ -1175,21 +1294,27 @@ else:
         ] if "VisitDate" in st.session_state.planned_df.columns else pd.DataFrame(columns=PLAN_COLS)
 
         pc   = len(daily_plans)
-        pcol = get_progress_color(pc, 10)
+        pcol = get_progress_color(pc, MAX_VISITS_PER_DAY)
 
         st.markdown(f"""
             <div class='progress-wrap'>
                 <div style='display:flex;justify-content:space-between;'>
                     <span class='progress-label'>Daily Progress — {visit_date.strftime('%d %b %Y')}</span>
-                    <span style='font-weight:800;color:{pcol};font-size:18px;'>{pc}/10</span>
+                    <span style='font-weight:800;color:{pcol};font-size:18px;'>{pc}/{MAX_VISITS_PER_DAY}</span>
                 </div>
                 <div class='progress-track'>
-                    <div class='progress-fill' style='width:{min(pc*10,100)}%;background:{pcol};'></div>
+                    <div class='progress-fill' style='width:{min(pc*100//MAX_VISITS_PER_DAY,100)}%;background:{pcol};'></div>
                 </div>
                 <div style='font-size:13px;color:#64748b;'>
-                    {"🚫 Maximum 10 stores reached." if pc >= 10 else f"✅ {10-pc} more store(s) can be added today."}
+                    {f"🚫 Maximum {MAX_VISITS_PER_DAY} stores reached." if pc >= MAX_VISITS_PER_DAY else f"✅ {MAX_VISITS_PER_DAY-pc} more store(s) can be added today."}
                 </div>
             </div>""", unsafe_allow_html=True)
+
+        if pc < MIN_VISITS_PER_DAY:
+            st.warning(f"⚠️ {visit_date.strftime('%d %b %Y')} has {pc} store(s). "
+                       f"Add at least {MIN_VISITS_PER_DAY - pc} more — minimum {MIN_VISITS_PER_DAY} per day is required.")
+        else:
+            st.success(f"✅ Minimum of {MIN_VISITS_PER_DAY} stores met for {visit_date.strftime('%d %b %Y')}.")
 
         search_query = st.text_input("🔍 Search stores by name, city or GST…", key="store_search", placeholder="e.g. Sharma Medical, Lucknow, 09AAA…")
 
@@ -1212,7 +1337,7 @@ else:
                 show = [c for c in ["Store","City","GSTNumber"] if c in daily_plans.columns]
                 st.dataframe(daily_plans[show], use_container_width=True, hide_index=True)
 
-        if pc < 10:
+        if pc < MAX_VISITS_PER_DAY:
             section_header("🏪", f"Available Stores ({len(available)})")
             if available.empty:
                 st.info("No stores found. Try a different search or city.")
@@ -1256,6 +1381,27 @@ else:
         emp_plans = st.session_state.planned_df[
             safe_col(st.session_state.planned_df, "EmployeeCode").astype(str) == str(emp_code)]
         download_beat_plan_button(emp_plans, "emp_dl", f"Beat_Plan_{emp_code}")
+
+    # ── MONTH PLAN ──
+    elif emp_menu == "🗓️ Month Plan":
+        st.markdown("### 🗓️ Month Plan")
+        st.caption(f"ℹ️ Every day needs at least {MIN_VISITS_PER_DAY} visits"
+                   f"{' (Sundays excluded)' if SKIP_SUNDAYS else ''}.")
+        c1, c2 = st.columns(2)
+        with c1:
+            yr = st.number_input("Year", 2024, 2100, date.today().year, key="mp_year")
+        with c2:
+            mn = st.selectbox("Month", list(range(1, 13)), index=date.today().month - 1,
+                              format_func=lambda m: calendar.month_name[m], key="mp_month")
+        comp = get_month_compliance(emp_code, int(yr), int(mn))
+        ok, total = month_summary(comp)
+        st.progress(ok / total if total else 0.0, text=f"{ok}/{total} days complete")
+        only_gaps = st.checkbox("Show only days that need attention", value=True, key="mp_gaps")
+        view = comp[comp["Visits"] < MIN_VISITS_PER_DAY] if only_gaps else comp
+        if view.empty:
+            st.success("✅ All days are complete.")
+        else:
+            st.dataframe(view, use_container_width=True, hide_index=True)
 
     # ── PENDING STORES (never planned) ──
     elif emp_menu == "📦 Pending Stores":
@@ -1305,10 +1451,11 @@ else:
                 (safe_col(st.session_state.planned_df, "EmployeeCode").astype(str) == str(emp_code)) &
                 (st.session_state.planned_df["VisitDate"] == plan_for_date)
             ] if "VisitDate" in st.session_state.planned_df.columns else pd.DataFrame()
-            slots_left = 10 - len(existing_on_date)
+            slots_left = MAX_VISITS_PER_DAY - len(existing_on_date)
 
             section_header("📦", f"Never-Planned Stores ({len(view_df)})")
-            st.caption(f"📅 Adding to **{plan_for_date.strftime('%d %b %Y')}** — {max(slots_left,0)} slot(s) left that day (max 10/day).")
+            st.caption(f"📅 Adding to **{plan_for_date.strftime('%d %b %Y')}** — {max(slots_left,0)} slot(s) left that day "
+                       f"(min {MIN_VISITS_PER_DAY}, max {MAX_VISITS_PER_DAY}/day).")
 
             for idx, row in view_df.iterrows():
                 col1, col2 = st.columns([5, 1])
@@ -1404,16 +1551,22 @@ else:
                     with col_del:
                         st.markdown("<br>", unsafe_allow_html=True)
                         if st.button("🗑️", key=f"del_plan_{idx}_{i}", help="Remove this entry"):
-                            row_id = row.get("id")
-                            if row_id and str(row_id).lower() not in ("", "nan", "none"):
-                                if delete_planned_visit(row_id):
-                                    st.session_state.planned_df = st.session_state.planned_df.drop(index=idx).reset_index(drop=True)
-                                    st.success("✅ Entry removed.")
-                                    st.rerun()
+                            vd_del = row.get("VisitDate")
+                            day_total = int((my["VisitDate"] == vd_del).sum())
+                            if day_total >= MIN_VISITS_PER_DAY and day_total - 1 < MIN_VISITS_PER_DAY:
+                                st.error(f"🚫 That day has exactly {MIN_VISITS_PER_DAY} stores. "
+                                         f"Add a replacement store first, then delete this one.")
                             else:
-                                st.session_state.planned_df = st.session_state.planned_df.drop(index=idx).reset_index(drop=True)
-                                st.warning("⚠️ Removed from session. DB row may persist — refresh data to sync.")
-                                st.rerun()
+                                row_id = row.get("id")
+                                if row_id and str(row_id).lower() not in ("", "nan", "none"):
+                                    if delete_planned_visit(row_id):
+                                        st.session_state.planned_df = st.session_state.planned_df.drop(index=idx).reset_index(drop=True)
+                                        st.success("✅ Entry removed.")
+                                        st.rerun()
+                                else:
+                                    st.session_state.planned_df = st.session_state.planned_df.drop(index=idx).reset_index(drop=True)
+                                    st.warning("⚠️ Removed from session. DB row may persist — refresh data to sync.")
+                                    st.rerun()
 
             st.markdown("---")
             download_beat_plan_button(my, "my_dl", f"My_Plans_{emp_code}")
@@ -1433,12 +1586,13 @@ else:
                 for vdate in sorted(upcoming["VisitDate"].unique()):
                     plans = upcoming[upcoming["VisitDate"] == vdate]
                     label = "🟢 Today" if vdate == date.today() else ""
+                    warn = f" ⚠️ under {MIN_VISITS_PER_DAY}" if len(plans) < MIN_VISITS_PER_DAY else ""
                     st.markdown(f"""
                         <div style='background:#f0f9ff;border-left:4px solid #1a56db;
                              padding:12px 16px;border-radius:10px;margin-bottom:8px;'>
                             <strong>📅 {vdate.strftime('%A, %d %B %Y')}</strong>
                             &nbsp;<span style='color:#1a56db;font-size:13px;font-weight:600;'>{label}</span>
-                            &nbsp;— {len(plans)} store(s)
+                            &nbsp;— {len(plans)} store(s){warn}
                         </div>""", unsafe_allow_html=True)
                     for _, p in plans.iterrows():
                         st.markdown(f"&nbsp;&nbsp;&nbsp;&nbsp;• **{p.get('Store','—')}** — {p.get('City','—')}")
