@@ -608,25 +608,35 @@ def fetch_emp_plans_live(emp_code, sel_date):
 # ====================== LIVE TRACKER ======================
 def fetch_plans_range_live(start, end):
     """Fetch planned_visits for [start, end] straight from Supabase (paginated)."""
-    rows, offset, batch = [], 0, 1000
-    try:
+    rows, batch = [], 1000
+    s, e_ = start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d")
+
+    def _pull(date_col):
+        out, offset = [], 0
         while True:
             resp = (
                 supabase.table("planned_visits").select("*")
-                .gte("VisitDate", start.strftime("%Y-%m-%d"))
-                .lte("VisitDate", end.strftime("%Y-%m-%d"))
+                .gte(date_col, s).lte(date_col, e_)
                 .order("id")
                 .range(offset, offset + batch - 1)
                 .execute()
             )
             if not resp.data:
                 break
-            rows.extend(resp.data)
+            out.extend(resp.data)
             if len(resp.data) < batch:
                 break
             offset += batch
-    except Exception as e:
-        st.warning(f"⚠️ Live fetch failed: {e}")
+        return out
+
+    # Postgres columns are lowercase in this table ("visitdate"); fall back to "VisitDate" just in case.
+    try:
+        try:
+            rows = _pull("visitdate")
+        except Exception:
+            rows = _pull("VisitDate")
+    except Exception as err:
+        st.warning(f"⚠️ Live fetch failed: {err}")
 
     if not rows:
         return pd.DataFrame(columns=PLAN_COLS)
