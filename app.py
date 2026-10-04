@@ -35,6 +35,29 @@ except Exception as e:
 MIN_VISITS_PER_DAY = 3      # a day with fewer visits is NOT considered submitted
 MAX_VISITS_PER_DAY = 10
 SKIP_SUNDAYS = False        # set True if Sundays don't need a plan
+PLAN_ONLY_NEXT_MONTH = True # True = employees can only plan dates in NEXT calendar month
+
+
+def get_plan_window():
+    """(first_day, last_day) of the month that is open for planning."""
+    today = date.today()
+    if not PLAN_ONLY_NEXT_MONTH:
+        return today, None
+    y, m = (today.year + 1, 1) if today.month == 12 else (today.year, today.month + 1)
+    return date(y, m, 1), date(y, m, calendar.monthrange(y, m)[1])
+
+
+def plan_date_kwargs():
+    """kwargs for st.date_input on every planning screen."""
+    first, last = get_plan_window()
+    if not PLAN_ONLY_NEXT_MONTH:
+        return {"value": date.today()}
+    return {"value": first, "min_value": first, "max_value": last}
+
+
+def plan_window_text():
+    first, last = get_plan_window()
+    return f"{first.strftime('%d %b')} – {last.strftime('%d %b %Y')}" if last else "any date"
 
 # ====================== STYLING ======================
 st.markdown("""
@@ -289,6 +312,12 @@ def save_master_to_supabase(table_name, df):
         return False
 
 def insert_planned_visit(record: dict):
+    if PLAN_ONLY_NEXT_MONTH:
+        _first, _last = get_plan_window()
+        _vd = pd.to_datetime(record.get("VisitDate"), errors="coerce")
+        if pd.isna(_vd) or not (_first <= _vd.date() <= _last):
+            st.error(f"🚫 Planning is open only for {plan_window_text()}.")
+            return None
     try:
         rec = {k: v for k, v in record.items() if k != "id"}
         if "VisitDate" in rec:
@@ -1403,7 +1432,7 @@ else:
     render_pending_marquee(pending_all)
 
     # ---- Month compliance banner ----
-    _today = date.today()
+    _today = get_plan_window()[0]
     _comp = get_month_compliance(emp_code, _today.year, _today.month)
     _ok, _total = month_summary(_comp)
     if _ok < _total:
@@ -1422,7 +1451,7 @@ else:
             with colA:
                 sel_label = st.selectbox("Select store", list(store_options.keys()), key="marquee_quick_store")
             with colB:
-                marquee_plan_date = st.date_input("📅 Plan for date", value=date.today(), key="marquee_plan_date")
+                marquee_plan_date = st.date_input("📅 Plan for date", key="marquee_plan_date", **plan_date_kwargs())
             with colC:
                 st.markdown("<br>", unsafe_allow_html=True)
                 confirm_clicked = st.button("✅ Plan It", key="marquee_confirm", use_container_width=True)
@@ -1480,9 +1509,12 @@ else:
 
         pending_stores_all = get_pending_stores_for_employee(emp_code)
 
+        if PLAN_ONLY_NEXT_MONTH:
+            st.info(f"📆 Planning is open only for next month: **{plan_window_text()}**.")
+
         c1, c2, c3 = st.columns(3)
         with c1:
-            visit_date = st.date_input("📅 Date", value=date.today(), key="beat_date")
+            visit_date = st.date_input("📅 Date", key="beat_date", **plan_date_kwargs())
         with c2:
             city_opts  = sorted(safe_col(employee_stores, "City").dropna().unique().tolist())
             sel_cities = st.multiselect("🌍 Cities (max 3)", city_opts, max_selections=3, key="city_ms")
@@ -1592,9 +1624,9 @@ else:
                    f"{' (Sundays excluded)' if SKIP_SUNDAYS else ''}.")
         c1, c2 = st.columns(2)
         with c1:
-            yr = st.number_input("Year", 2024, 2100, date.today().year, key="mp_year")
+            yr = st.number_input("Year", 2024, 2100, get_plan_window()[0].year, key="mp_year")
         with c2:
-            mn = st.selectbox("Month", list(range(1, 13)), index=date.today().month - 1,
+            mn = st.selectbox("Month", list(range(1, 13)), index=get_plan_window()[0].month - 1,
                               format_func=lambda m: calendar.month_name[m], key="mp_month")
         comp = get_month_compliance(emp_code, int(yr), int(mn))
         ok, total = month_summary(comp)
@@ -1638,7 +1670,7 @@ else:
             with col_search:
                 search_q = st.text_input("🔍 Search pending stores…", key="pend_store_search", placeholder="Store name, city, GST…")
             with col_date:
-                plan_for_date = st.date_input("📅 Plan for date", value=date.today(), key="pend_store_plan_date")
+                plan_for_date = st.date_input("📅 Plan for date", key="pend_store_plan_date", **plan_date_kwargs())
 
             view_df = pend_stores.copy()
             if search_q.strip():
