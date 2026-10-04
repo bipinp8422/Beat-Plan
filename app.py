@@ -1,6 +1,6 @@
 import streamlit as st
 import pandas as pd
-from datetime import date, timedelta
+from datetime import date, timedelta, datetime
 import calendar
 import re
 import io
@@ -605,6 +605,159 @@ def fetch_emp_plans_live(emp_code, sel_date):
         st.warning(f"⚠️ Could not load details: {e}")
         return pd.DataFrame()
 
+# ====================== LIVE TRACKER ======================
+def fetch_plans_range_live(start, end):
+    """Fetch planned_visits for [start, end] straight from Supabase (paginated)."""
+    rows, offset, batch = [], 0, 1000
+    try:
+        while True:
+            resp = (
+                supabase.table("planned_visits").select("*")
+                .gte("VisitDate", start.strftime("%Y-%m-%d"))
+                .lte("VisitDate", end.strftime("%Y-%m-%d"))
+                .order("id")
+                .range(offset, offset + batch - 1)
+                .execute()
+            )
+            if not resp.data:
+                break
+            rows.extend(resp.data)
+            if len(resp.data) < batch:
+                break
+            offset += batch
+    except Exception as e:
+        st.warning(f"⚠️ Live fetch failed: {e}")
+
+    if not rows:
+        return pd.DataFrame(columns=PLAN_COLS)
+
+    df = normalize_columns(pd.DataFrame(rows))
+    for col in PLAN_COLS:
+        if col not in df.columns:
+            df[col] = ""
+    df["VisitDate"] = pd.to_datetime(df["VisitDate"], errors="coerce").dt.date
+    df["EmployeeCode"] = df["EmployeeCode"].astype(str).str.strip()
+    return df.dropna(subset=["VisitDate"])
+
+
+def build_live_tracker(plan_df, emp_df, gst_df, start, end):
+    expected = [start + timedelta(days=i) for i in range((end - start).days + 1)]
+    if SKIP_SUNDAYS:
+        expected = [d for d in expected if d.weekday() != 6]
+    exp_set, n_exp = set(expected), len(expected)
+
+    rows = []
+    for _, e in emp_df.iterrows():
+        ec = str(e.get("EmployeeCode", "")).strip()
+        mine = plan_df[plan_df["EmployeeCode"] == ec] if not plan_df.empty else plan_df
+        mine = mine[mine["VisitDate"].isin(exp_set)] if not mine.empty else mine
+
+        per_day = mine["VisitDate"].value_counts() if not mine.empty else pd.Series(dtype=int)
+        full    = int((per_day >= MIN_VISITS_PER_DAY).sum())
+        partial = int(((per_day > 0) & (per_day < MIN_VISITS_PER_DAY)).sum())
+        covered = int(mine["StoreID"].astype(str).nunique()) if not mine.empty else 0
+        assigned = int((safe_col(gst_df, "EmployeeCode").astype(str) == ec).sum()) if not gst_df.empty else 0
+
+        rows.append({
+            "EmployeeCode":     ec,
+            "EmployeeName":     e.get("EmployeeName", ec),
+            "Days Complete":    full,
+            "Days Partial":     partial,
+            "Days Missing":     max(n_exp - full - partial, 0),
+            "Total Visits":     int(per_day.sum()),
+            "Stores Covered":   covered,
+            "Stores Assigned":  assigned,
+            "Store Coverage %": round(covered * 100 / assigned, 1) if assigned else 0.0,
+            "Compliance %":     round(full * 100 / n_exp, 1) if n_exp else 0.0,
+            "Last Plan Date":   mine["VisitDate"].max() if not mine.empty else None,
+        })
+    return pd.DataFrame(rows), n_exp
+
+
+def render_live_tracker(start, end):
+    emp_df, gst_df = st.session_state.employee_df, st.session_state.gst_df
+    plan_df = fetch_plans_range_live(start, end)
+    res, n_exp = build_live_tracker(plan_df, emp_df, gst_df, start, end)
+
+    st.caption(f"🕒 Last updated: {datetime.now().strftime('%d %b %Y, %I:%M:%S %p')} "
+               f"• {n_exp} required day(s) in range • {MIN_VISITS_PER_DAY}+ visits = day complete")
+
+    if res.empty:
+        st.info("No employees found.")
+        return
+
+    k = st.columns(5)
+    kpis = [
+        ("blue",   "👥", "Employees",          len(res)),
+        ("green",  "✅", "Fully Compliant",    int((res["Days Complete"] == n_exp).sum())),
+        ("amber",  "⚠️", "Partial Days (all)", int(res["Days Partial"].sum())),
+        ("purple", "🏪", "Stores Covered",     int(res["Stores Covered"].sum())),
+        ("red",    "📋", "Total Visits",       int(res["Total Visits"].sum())),
+    ]
+    for col, (color, icon, label, val) in zip(k, kpis):
+        with col:
+            st.markdown(f"""
+                <div class='metric-card {color}'>
+                    <div class='metric-icon'>{icon}</div>
+                    <div class='metric-label'>{label}</div>
+                    <div class='metric-value'>{val}</div>
+                </div>""", unsafe_allow_html=True)
+
+    f1, f2 = st.columns([3, 2])
+    with f1:
+        q = st.text_input("🔍 Search employee", key="lt_search", placeholder="Name or code…")
+    with f2:
+        only_gaps = st.checkbox("Show only employees with gaps", key="lt_gaps")
+
+    view = res.copy()
+    if q.strip():
+        ql = q.strip().lower()
+        view = view[
+            view["EmployeeName"].astype(str).str.lower().str.contains(ql, na=False) |
+            view["EmployeeCode"].astype(str).str.lower().str.contains(ql, na=False)
+        ]
+    if only_gaps:
+        view = view[view["Days Complete"] < n_exp]
+    view = view.sort_values(["Compliance %", "Total Visits"], ascending=[True, True])
+
+    st.dataframe(
+        view, use_container_width=True, hide_index=True,
+        column_config={
+            "Compliance %":     st.column_config.ProgressColumn("Compliance %", min_value=0, max_value=100, format="%.1f%%"),
+            "Store Coverage %": st.column_config.ProgressColumn("Store Coverage %", min_value=0, max_value=100, format="%.1f%%"),
+        },
+    )
+
+    out = io.BytesIO()
+    with pd.ExcelWriter(out, engine="openpyxl") as w:
+        view.to_excel(w, index=False, sheet_name="Live Tracker")
+    out.seek(0)
+    st.download_button(
+        "📥 Download Tracker (Excel)", data=out.getvalue(),
+        file_name=f"Live_Tracker_{start}_{end}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        use_container_width=True, key="lt_dl",
+    )
+
+    # Day-wise drill-down
+    st.markdown("#### 🔎 Day-wise detail")
+    labels = [f"{r.EmployeeName} ({r.EmployeeCode})" for r in res.itertuples()]
+    pick = st.selectbox("Employee", labels, key="lt_pick")
+    pick_code = res.iloc[labels.index(pick)]["EmployeeCode"]
+    mine = plan_df[plan_df["EmployeeCode"] == pick_code] if not plan_df.empty else plan_df
+    if mine.empty:
+        st.info("No plans in this range.")
+    else:
+        day = (
+            mine.groupby("VisitDate")
+            .agg(Visits=("StoreID", "count"),
+                 Stores=("Store", lambda s: ", ".join(s.astype(str))))
+            .reset_index().sort_values("VisitDate")
+        )
+        day["Status"] = day["Visits"].apply(
+            lambda c: "✅ Complete" if c >= MIN_VISITS_PER_DAY else "⚠️ Incomplete")
+        st.dataframe(day, use_container_width=True, hide_index=True)
+
 # ====================== BEAT PLAN PIVOT BUILDER ======================
 def build_beat_plan_pivot(fp_df):
     """
@@ -710,8 +863,8 @@ if st.session_state.role == "admin":
 
     admin_menu = st.sidebar.radio(
         "Navigation",
-        ["📊 Dashboard", "📋 Beat Plan Status", "🗓️ Month Compliance", "👥 Manage Employees",
-         "🏪 Manage Stores", "📋 View Plans", "🔄 Refresh Data"],
+        ["📊 Dashboard", "📡 Live Tracker", "📋 Beat Plan Status", "🗓️ Month Compliance",
+         "👥 Manage Employees", "🏪 Manage Stores", "📋 View Plans", "🔄 Refresh Data"],
     )
 
     # ── DASHBOARD ──
@@ -876,6 +1029,32 @@ if st.session_state.role == "admin":
             st.dataframe(disp, use_container_width=True, hide_index=True)
         else:
             st.info("No plans yet.")
+
+    # ── LIVE TRACKER ──
+    elif admin_menu == "📡 Live Tracker":
+        st.markdown("### 📡 Live Beat Plan Tracker")
+        st.caption("ℹ️ Fetched live from the database: days submitted, visits and stores covered per employee.")
+        today = date.today()
+        c1, c2, c3 = st.columns([3, 2, 2])
+        with c1:
+            drange = st.date_input("📅 Date range",
+                                   value=(today.replace(day=1), today), key="lt_range")
+        with c2:
+            auto = st.checkbox("🔁 Auto-refresh", value=False, key="lt_auto")
+        with c3:
+            every = st.selectbox("Every", [30, 60, 120, 300], index=1,
+                                 format_func=lambda s: f"{s}s", key="lt_every", disabled=not auto)
+
+        if isinstance(drange, (list, tuple)) and len(drange) == 2:
+            s_date, e_date = drange
+            if auto and hasattr(st, "fragment"):
+                st.fragment(run_every=every)(render_live_tracker)(s_date, e_date)
+            else:
+                if st.button("🔄 Refresh now", key="lt_refresh"):
+                    st.rerun()
+                render_live_tracker(s_date, e_date)
+        else:
+            st.info("Select both a start and an end date.")
 
     # ── BEAT PLAN STATUS ──
     elif admin_menu == "📋 Beat Plan Status":
