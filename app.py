@@ -1272,6 +1272,20 @@ if st.session_state.role == "admin":
         with tab1:
             if not st.session_state.gst_df.empty:
                 st.dataframe(st.session_state.gst_df, use_container_width=True, hide_index=True)
+
+                store_dl = st.session_state.gst_df.drop(columns=["id"], errors="ignore")
+                store_out = io.BytesIO()
+                with pd.ExcelWriter(store_out, engine="openpyxl") as writer:
+                    store_dl.to_excel(writer, index=False, sheet_name="Store Master")
+                store_out.seek(0)
+                st.download_button(
+                    label="📥 Download Store Master (Excel)",
+                    data=store_out.getvalue(),
+                    file_name=f"Store_Master_{date.today().strftime('%Y-%m-%d')}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True,
+                    key="store_master_dl",
+                )
             else:
                 st.info("No stores found.")
         with tab2:
