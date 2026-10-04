@@ -311,6 +311,28 @@ def save_master_to_supabase(table_name, df):
         st.error(f"❌ Save failed for `{table_name}`: {e}")
         return False
 
+def _insert_row(table, rec, lower_first=False):
+    """Insert a row. Postgres columns may be lowercase (e.g. 'city') while the app uses
+    CamelCase ('City') - try the preferred casing, then fall back to the other."""
+    lower = {k.lower(): v for k, v in rec.items()}
+    first, second = (lower, rec) if lower_first else (rec, lower)
+    try:
+        return supabase.table(table).insert(first).execute()
+    except Exception as e:
+        if "PGRST204" in str(e) or "schema cache" in str(e):
+            return supabase.table(table).insert(second).execute()
+        raise
+
+
+def _delete_eq(table, col, val):
+    try:
+        return supabase.table(table).delete().eq(col, val).execute()
+    except Exception as e:
+        if "42703" in str(e) or "does not exist" in str(e):
+            return supabase.table(table).delete().eq(col.lower(), val).execute()
+        raise
+
+
 def insert_planned_visit(record: dict):
     if PLAN_ONLY_NEXT_MONTH:
         _first, _last = get_plan_window()
@@ -326,7 +348,7 @@ def insert_planned_visit(record: dict):
                 rec["VisitDate"] = v.strftime("%Y-%m-%d")
             else:
                 rec["VisitDate"] = str(v)
-        response = supabase.table("planned_visits").insert(rec).execute()
+        response = _insert_row("planned_visits", rec, lower_first=True)
         if response.data:
             return response.data[0].get("id")
         return None
@@ -345,7 +367,7 @@ def delete_planned_visit(row_id):
 def insert_gst_row(record: dict):
     try:
         rec = {k: v for k, v in record.items() if k != "id"}
-        response = supabase.table("gst_master").insert(rec).execute()
+        response = _insert_row("gst_master", rec)
         if response.data:
             return response.data[0].get("id")
         return None
@@ -355,7 +377,7 @@ def insert_gst_row(record: dict):
 
 def delete_gst_row(store_id):
     try:
-        supabase.table("gst_master").delete().eq("StoreID", str(store_id)).execute()
+        _delete_eq("gst_master", "StoreID", str(store_id))
         return True
     except Exception as e:
         st.error(f"❌ Store delete failed: {e}")
@@ -364,7 +386,7 @@ def delete_gst_row(store_id):
 def insert_employee_row(record: dict):
     try:
         rec = {k: v for k, v in record.items() if k != "id"}
-        response = supabase.table("employee_master").insert(rec).execute()
+        response = _insert_row("employee_master", rec)
         if response.data:
             return response.data[0].get("id")
         return None
@@ -374,7 +396,7 @@ def insert_employee_row(record: dict):
 
 def delete_employee_row(emp_code):
     try:
-        supabase.table("employee_master").delete().eq("EmployeeCode", str(emp_code)).execute()
+        _delete_eq("employee_master", "EmployeeCode", str(emp_code))
         return True
     except Exception as e:
         st.error(f"❌ Employee delete failed: {e}")
