@@ -748,9 +748,13 @@ def build_auto_plan(emp_code, emp_name, employee_stores, pending_stores,
     return rows, unplaced
 
 
-def render_auto_planner(emp_code, emp_name, employee_stores, pending_stores):
+def render_auto_planner(emp_code, emp_name, employee_stores, pending_stores, standalone=False):
     first, last = get_plan_window()
-    with st.expander("🤖 Auto Plan Generator (pending stores)", expanded=False):
+    _s = st.session_state.get("ap_state")
+    if _s and _s.get("emp") != emp_code:
+        st.session_state.ap_state = None
+    ctx = st.container() if standalone else st.expander("🤖 Auto Plan Generator (pending stores)", expanded=False)
+    with ctx:
         st.caption("Automatically spreads never-planned stores across the selected dates. "
                    "You can review everything before it is saved.")
 
@@ -791,7 +795,7 @@ def render_auto_planner(emp_code, emp_name, employee_stores, pending_stores):
                         dates, per_day, replace, topup)
                     st.session_state.ap_state = {
                         "rows": rows, "unplaced": unplaced,
-                        "dates": dates, "replace": replace,
+                        "dates": dates, "replace": replace, "emp": emp_code,
                     }
 
         state = st.session_state.get("ap_state")
@@ -1123,7 +1127,8 @@ if st.session_state.role == "admin":
     admin_menu = st.sidebar.radio(
         "Navigation",
         ["📊 Dashboard", "📡 Live Tracker", "📋 Beat Plan Status", "🗓️ Month Compliance",
-         "👥 Manage Employees", "🏪 Manage Stores", "📋 View Plans", "🔄 Refresh Data"],
+         "👥 Manage Employees", "🏪 Manage Stores", "🤖 Auto Plan Generator",
+         "📋 View Plans", "🔄 Refresh Data"],
     )
 
     # ── DASHBOARD ──
@@ -1630,6 +1635,30 @@ if st.session_state.role == "admin":
                     key="pivot_dl_admin",
                 )
 
+    # ── AUTO PLAN GENERATOR (admin) ──
+    elif admin_menu == "🤖 Auto Plan Generator":
+        st.markdown("### 🤖 Auto Plan Generator")
+        st.caption("Pick an employee, preview the auto-generated plan for their never-planned stores, then save.")
+        emp_df = st.session_state.employee_df
+        if emp_df.empty or "EmployeeCode" not in emp_df.columns:
+            st.info("No employees found.")
+        else:
+            labels = [f"{r.get('EmployeeName', r['EmployeeCode'])} ({r['EmployeeCode']})"
+                      for _, r in emp_df.iterrows()]
+            pick = st.selectbox("👤 Employee", labels, key="ap_admin_emp")
+            sel = emp_df.iloc[labels.index(pick)]
+            sel_code = str(sel["EmployeeCode"])
+            sel_name = sel.get("EmployeeName", sel_code)
+            gst = st.session_state.gst_df
+            sel_stores = gst[safe_col(gst, "EmployeeCode").astype(str) == sel_code] \
+                if not gst.empty else pd.DataFrame(columns=GST_COLS)
+            sel_pending = get_pending_stores_for_employee(sel_code)
+            st.caption(f"🏪 {len(sel_stores)} assigned • 📦 {len(sel_pending)} never planned")
+            if sel_stores.empty:
+                st.warning("⚠️ No stores assigned to this employee.")
+            else:
+                render_auto_planner(sel_code, sel_name, sel_stores, sel_pending, standalone=True)
+
     # ── REFRESH ──
     elif admin_menu == "🔄 Refresh Data":
         st.info("Syncs latest data from Supabase.")
@@ -1882,9 +1911,6 @@ else:
                 </div>""", unsafe_allow_html=True)
 
         st.markdown("---")
-
-        # 🤖 NEW: automatic plan generator
-        render_auto_planner(emp_code, emp_name, employee_stores, pend_stores)
 
         if pend_stores.empty:
             st.success("🎉 You've planned every assigned store at least once!")
