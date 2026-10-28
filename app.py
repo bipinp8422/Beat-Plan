@@ -748,114 +748,164 @@ def build_auto_plan(emp_code, emp_name, employee_stores, pending_stores,
     return rows, unplaced
 
 
-def render_auto_planner(emp_code, emp_name, employee_stores, pending_stores, standalone=False):
+def _pending_excluding_dates(emp_code, stores, dates):
+    """Never-planned stores for an employee, ignoring plans that fall on `dates`
+    (used when those dates are about to be replaced)."""
+    plan_df = st.session_state.planned_df
+    mine = plan_df[safe_col(plan_df, "EmployeeCode").astype(str) == str(emp_code)] \
+        if not plan_df.empty else plan_df
+    if not mine.empty and "VisitDate" in mine.columns:
+        mine = mine[~mine["VisitDate"].isin(set(dates))]
+    ids = set(safe_col(mine, "StoreID").astype(str).str.strip()) if not mine.empty else set()
+    return stores[~safe_col(stores, "StoreID").astype(str).str.strip().isin(ids)]
+
+
+def render_auto_planner_all():
+    """Admin: generate the auto plan for ALL employees in one go."""
+    emp_df = st.session_state.employee_df
+    gst = st.session_state.gst_df
     first, last = get_plan_window()
-    _s = st.session_state.get("ap_state")
-    if _s and _s.get("emp") != emp_code:
-        st.session_state.ap_state = None
-    ctx = st.container() if standalone else st.expander("🤖 Auto Plan Generator (pending stores)", expanded=False)
-    with ctx:
-        st.caption("Automatically spreads never-planned stores across the selected dates. "
-                   "You can review everything before it is saved.")
 
-        c1, c2 = st.columns([3, 2])
-        with c1:
-            if last:
-                rng = st.date_input("📅 Date range", value=(first, last),
-                                    min_value=first, max_value=last, key="ap_range")
+    if emp_df.empty or "EmployeeCode" not in emp_df.columns:
+        st.info("No employees found.")
+        return
+
+    c1, c2 = st.columns([3, 2])
+    with c1:
+        if last:
+            rng = st.date_input("📅 Date range", value=(first, last),
+                                min_value=first, max_value=last, key="apa_range")
+        else:
+            rng = st.date_input("📅 Date range",
+                                value=(date.today(), date.today() + timedelta(days=29)), key="apa_range")
+    with c2:
+        per_day = st.number_input("Stores per day", MIN_VISITS_PER_DAY, MAX_VISITS_PER_DAY,
+                                  MIN_VISITS_PER_DAY, key="apa_per_day")
+
+    c3, c4, c5 = st.columns(3)
+    with c3:
+        inc_sun = st.checkbox("Include Sundays", value=not SKIP_SUNDAYS, key="apa_sun")
+    with c4:
+        replace = st.checkbox("Replace existing plans on these dates", value=False, key="apa_replace")
+    with c5:
+        topup = st.checkbox(f"Top up days to {MIN_VISITS_PER_DAY} with repeat visits",
+                            value=True, key="apa_topup")
+
+    if st.button("🔍 Generate Preview for ALL Employees", key="apa_preview_btn", use_container_width=True):
+        if not (isinstance(rng, (list, tuple)) and len(rng) == 2):
+            st.error("Select both a start and an end date.")
+        else:
+            s_d, e_d = rng
+            dates = [s_d + timedelta(days=i) for i in range((e_d - s_d).days + 1)]
+            if not inc_sun:
+                dates = [d for d in dates if d.weekday() != 6]
+            if not dates:
+                st.error("No valid dates in this range.")
             else:
-                rng = st.date_input("📅 Date range",
-                                    value=(date.today(), date.today() + timedelta(days=29)), key="ap_range")
-        with c2:
-            per_day = st.number_input("Stores per day", MIN_VISITS_PER_DAY, MAX_VISITS_PER_DAY,
-                                      MIN_VISITS_PER_DAY, key="ap_per_day")
+                all_rows, summary, skipped, codes = [], [], [], []
+                with st.spinner("Building plans for all employees…"):
+                    for _, e in emp_df.iterrows():
+                        ec = str(e.get("EmployeeCode", "")).strip()
+                        en = e.get("EmployeeName", ec)
+                        stores = gst[safe_col(gst, "EmployeeCode").astype(str) == ec] \
+                            if not gst.empty else pd.DataFrame(columns=GST_COLS)
+                        if stores.empty:
+                            skipped.append(f"{en} ({ec})")
+                            continue
+                        pend = _pending_excluding_dates(ec, stores, dates) if replace \
+                            else get_pending_stores_for_employee(ec)
+                        rows, unplaced = build_auto_plan(ec, en, stores, pend, dates, per_day, replace, topup)
+                        all_rows.extend(rows)
+                        codes.append(ec)
+                        summary.append({
+                            "EmployeeCode": ec, "EmployeeName": en,
+                            "Stores Assigned": len(stores), "Never Planned": len(pend),
+                            "New Visits": sum(1 for r in rows if r["Type"] == "New"),
+                            "Top-up Visits": sum(1 for r in rows if r["Type"] == "Top-up"),
+                            "Could Not Fit": unplaced,
+                        })
+                st.session_state.apa_state = {
+                    "rows": all_rows, "summary": summary, "skipped": skipped,
+                    "codes": codes, "dates": dates, "replace": replace,
+                }
 
-        c3, c4, c5 = st.columns(3)
-        with c3:
-            inc_sun = st.checkbox("Include Sundays", value=not SKIP_SUNDAYS, key="ap_sun")
-        with c4:
-            replace = st.checkbox("Replace existing plans on these dates", value=False, key="ap_replace")
-        with c5:
-            topup = st.checkbox(f"Top up days to {MIN_VISITS_PER_DAY} with repeat visits",
-                                value=True, key="ap_topup")
+    state = st.session_state.get("apa_state")
+    if not state:
+        return
 
-        if st.button("🔍 Generate Preview", key="ap_preview_btn", use_container_width=True):
-            if not (isinstance(rng, (list, tuple)) and len(rng) == 2):
-                st.error("Select both a start and an end date.")
-            else:
-                s_d, e_d = rng
-                dates = [s_d + timedelta(days=i) for i in range((e_d - s_d).days + 1)]
-                if not inc_sun:
-                    dates = [d for d in dates if d.weekday() != 6]
-                if not dates:
-                    st.error("No valid dates in this range.")
-                else:
-                    rows, unplaced = build_auto_plan(
-                        emp_code, emp_name, employee_stores, pending_stores,
-                        dates, per_day, replace, topup)
-                    st.session_state.ap_state = {
-                        "rows": rows, "unplaced": unplaced,
-                        "dates": dates, "replace": replace, "emp": emp_code,
-                    }
+    rows = state["rows"]
+    if not rows:
+        st.info("Nothing to add for the selected dates.")
+        return
 
-        state = st.session_state.get("ap_state")
-        if not state:
-            return
+    n_new = sum(1 for r in rows if r["Type"] == "New")
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Employees", len(state["codes"]))
+    m2.metric("New (never-planned) visits", n_new)
+    m3.metric("Top-up repeat visits", len(rows) - n_new)
+    m4.metric("Total rows to save", len(rows))
 
-        rows = state["rows"]
-        if not rows and not state["replace"]:
-            st.info("Nothing to add for the selected dates.")
-            return
+    if state["skipped"]:
+        st.warning(f"⚠️ Skipped (no stores assigned): {', '.join(state['skipped'])}")
+    unfit = sum(s["Could Not Fit"] for s in state["summary"])
+    if unfit:
+        st.warning(f"⚠️ {unfit} pending store(s) could not fit. Increase stores per day, "
+                   f"widen the date range, or include Sundays.")
+    if state["replace"]:
+        st.error(f"🗑️ Existing plans of ALL listed employees between "
+                 f"{state['dates'][0].strftime('%d %b')} and {state['dates'][-1].strftime('%d %b %Y')} "
+                 f"will be DELETED and replaced.")
 
-        n_new = sum(1 for r in rows if r["Type"] == "New")
-        n_top = len(rows) - n_new
-        m1, m2, m3 = st.columns(3)
-        m1.metric("New (never-planned) stores", n_new)
-        m2.metric("Top-up repeat visits", n_top)
-        m3.metric("Days covered", len({r["VisitDate"] for r in rows}))
+    st.markdown("#### 📊 Employee-wise summary")
+    st.dataframe(pd.DataFrame(state["summary"]), use_container_width=True, hide_index=True)
 
-        if state["unplaced"] > 0:
-            st.warning(f"⚠️ {state['unplaced']} pending store(s) could not fit. "
-                       f"Increase stores per day, widen the date range, or include Sundays.")
-        if state["replace"]:
-            st.error(f"🗑️ Existing plans of yours between {state['dates'][0].strftime('%d %b')} and "
-                     f"{state['dates'][-1].strftime('%d %b %Y')} will be DELETED and replaced.")
+    prev = pd.DataFrame(rows)[["EmployeeCode", "EmployeeName", "VisitDate", "Store",
+                               "City", "StoreID", "GSTNumber", "Type"]] \
+        .sort_values(["EmployeeCode", "VisitDate", "City", "Store"])
+    with st.expander(f"👁️ Full preview ({len(prev)} rows)"):
+        st.dataframe(prev, use_container_width=True, hide_index=True)
 
-        prev = pd.DataFrame(rows)
-        if not prev.empty:
-            prev = prev[["VisitDate", "Store", "City", "StoreID", "GSTNumber", "Type"]] \
-                .sort_values(["VisitDate", "City", "Store"])
-            st.dataframe(prev, use_container_width=True, hide_index=True)
+    out = io.BytesIO()
+    with pd.ExcelWriter(out, engine="openpyxl") as w:
+        prev.to_excel(w, index=False, sheet_name="Auto Plan Preview")
+    out.seek(0)
+    st.download_button("📥 Download Preview (Excel)", data=out.getvalue(),
+                       file_name=f"Auto_Plan_Preview_{date.today().strftime('%Y-%m-%d')}.xlsx",
+                       mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                       use_container_width=True, key="apa_dl")
 
-        b1, b2 = st.columns(2)
-        with b1:
-            if st.button("✅ Confirm & Save", key="ap_confirm", use_container_width=True):
-                try:
-                    plan_df = st.session_state.planned_df
-                    # replace: delete this employee's plans on the selected dates
-                    if state["replace"] and not plan_df.empty and "VisitDate" in plan_df.columns:
-                        m = (safe_col(plan_df, "EmployeeCode").astype(str) == str(emp_code)) & \
-                            (plan_df["VisitDate"].isin(set(state["dates"])))
-                        ids = [i for i in plan_df.loc[m, "id"].tolist()
-                               if str(i).lower() not in ("", "nan", "none")] if "id" in plan_df.columns else []
-                        if ids:
-                            _bulk_delete_planned(ids)
-                        st.session_state.planned_df = plan_df[~m].reset_index(drop=True)
+    b1, b2 = st.columns(2)
+    with b1:
+        if st.button("✅ Confirm & Save for ALL Employees", key="apa_confirm", use_container_width=True):
+            try:
+                plan_df = st.session_state.planned_df
+                if state["replace"] and not plan_df.empty and "VisitDate" in plan_df.columns:
+                    m = safe_col(plan_df, "EmployeeCode").astype(str).isin(set(state["codes"])) & \
+                        plan_df["VisitDate"].isin(set(state["dates"]))
+                    ids = [i for i in plan_df.loc[m, "id"].tolist()
+                           if str(i).lower() not in ("", "nan", "none")] if "id" in plan_df.columns else []
+                    if ids:
+                        _bulk_delete_planned(ids)
+                    st.session_state.planned_df = plan_df[~m].reset_index(drop=True)
 
-                    saved = _bulk_insert_planned(rows) if rows else []
-                    if saved:
-                        new_df = clean_dataframe(pd.DataFrame(saved), PLAN_COLS)
-                        st.session_state.planned_df = pd.concat(
-                            [st.session_state.planned_df, new_df], ignore_index=True)
-                    st.session_state.ap_state = None
-                    st.success(f"✅ {len(saved)} visit(s) saved!")
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"❌ Auto plan failed: {e}")
-        with b2:
-            if st.button("✖ Discard", key="ap_discard", use_container_width=True):
-                st.session_state.ap_state = None
+                saved, bar = [], st.progress(0.0, text="Saving…")
+                for i in range(0, len(rows), 200):
+                    saved.extend(_bulk_insert_planned(rows[i:i + 200]))
+                    bar.progress(min((i + 200) / len(rows), 1.0), text=f"Saving… {min(i + 200, len(rows))}/{len(rows)}")
+                if saved:
+                    new_df = clean_dataframe(pd.DataFrame(saved), PLAN_COLS)
+                    st.session_state.planned_df = pd.concat(
+                        [st.session_state.planned_df, new_df], ignore_index=True)
+                st.session_state.apa_state = None
+                st.success(f"✅ {len(saved)} visit(s) saved for {len(state['codes'])} employee(s)!")
                 st.rerun()
+            except Exception as e:
+                st.error(f"❌ Auto plan failed: {e}")
+    with b2:
+        if st.button("✖ Discard", key="apa_discard", use_container_width=True):
+            st.session_state.apa_state = None
+            st.rerun()
+
 
 # ====================== LIVE TRACKER ======================
 def fetch_plans_range_live(start, end):
@@ -1116,7 +1166,7 @@ with c3:
     if st.button("🚪 Logout", use_container_width=True):
         for k, v in {"logged_in": False, "role": "", "emp_code": "", "emp_name": "", "selected_cities": []}.items():
             st.session_state[k] = v
-        st.session_state.ap_state = None
+        st.session_state.apa_state = None
         st.rerun()
 
 # ====================== ADMIN PANEL ======================
@@ -1637,27 +1687,10 @@ if st.session_state.role == "admin":
 
     # ── AUTO PLAN GENERATOR (admin) ──
     elif admin_menu == "🤖 Auto Plan Generator":
-        st.markdown("### 🤖 Auto Plan Generator")
-        st.caption("Pick an employee, preview the auto-generated plan for their never-planned stores, then save.")
-        emp_df = st.session_state.employee_df
-        if emp_df.empty or "EmployeeCode" not in emp_df.columns:
-            st.info("No employees found.")
-        else:
-            labels = [f"{r.get('EmployeeName', r['EmployeeCode'])} ({r['EmployeeCode']})"
-                      for _, r in emp_df.iterrows()]
-            pick = st.selectbox("👤 Employee", labels, key="ap_admin_emp")
-            sel = emp_df.iloc[labels.index(pick)]
-            sel_code = str(sel["EmployeeCode"])
-            sel_name = sel.get("EmployeeName", sel_code)
-            gst = st.session_state.gst_df
-            sel_stores = gst[safe_col(gst, "EmployeeCode").astype(str) == sel_code] \
-                if not gst.empty else pd.DataFrame(columns=GST_COLS)
-            sel_pending = get_pending_stores_for_employee(sel_code)
-            st.caption(f"🏪 {len(sel_stores)} assigned • 📦 {len(sel_pending)} never planned")
-            if sel_stores.empty:
-                st.warning("⚠️ No stores assigned to this employee.")
-            else:
-                render_auto_planner(sel_code, sel_name, sel_stores, sel_pending, standalone=True)
+        st.markdown("### 🤖 Auto Plan Generator — All Employees")
+        st.caption("Generates a plan for every employee's never-planned stores in one go. "
+                   "Review the preview, then save.")
+        render_auto_planner_all()
 
     # ── REFRESH ──
     elif admin_menu == "🔄 Refresh Data":
