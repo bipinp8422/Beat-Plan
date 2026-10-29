@@ -35,7 +35,7 @@ except Exception as e:
 MIN_VISITS_PER_DAY = 3      # a day with fewer visits is NOT considered submitted
 MAX_VISITS_PER_DAY = 10
 AUTO_MIN_PER_DAY = 5        # auto planner: every planned day has at least this many stores
-SKIP_SUNDAYS = False        # set True if Sundays don't need a plan
+SKIP_SUNDAYS = True         # Sunday is the weekly off: no plan allowed, not counted in compliance
 PLAN_ONLY_NEXT_MONTH = True # True = employees can only plan dates in NEXT calendar month
 
 
@@ -340,6 +340,11 @@ def insert_planned_visit(record: dict):
         _vd = pd.to_datetime(record.get("VisitDate"), errors="coerce")
         if pd.isna(_vd) or not (_first <= _vd.date() <= _last):
             st.error(f"🚫 Planning is open only for {plan_window_text()}.")
+            return None
+    if SKIP_SUNDAYS:
+        _vd2 = pd.to_datetime(record.get("VisitDate"), errors="coerce")
+        if not pd.isna(_vd2) and _vd2.weekday() == 6:
+            st.error("🚫 Sunday is a weekly off - no plan can be added on a Sunday. Pick another date.")
             return None
     try:
         rec = {k: v for k, v in record.items() if k != "id"}
@@ -662,6 +667,8 @@ def _bulk_insert_planned(records):
     """Insert many planned_visits rows. Tries lowercase column names first, then CamelCase."""
     payload = []
     for r in records:
+        if SKIP_SUNDAYS and r["VisitDate"].weekday() == 6:
+            continue  # never save a Sunday plan
         p = {k: v for k, v in r.items() if k not in ("id", "Type")}
         p["VisitDate"] = p["VisitDate"].strftime("%Y-%m-%d")
         payload.append(p)
@@ -688,6 +695,8 @@ def _bulk_delete_planned(ids):
 def build_auto_plan(emp_code, emp_name, employee_stores, pending_stores,
                     dates, per_day, replace, topup):
     """Classic mode. Returns (rows, unplaced_count). Pending stores first, then optional top-up to the daily minimum."""
+    if SKIP_SUNDAYS:
+        dates = [d for d in dates if d.weekday() != 6]
     plan_df = st.session_state.planned_df
     mine = plan_df[safe_col(plan_df, "EmployeeCode").astype(str) == str(emp_code)] \
         if not plan_df.empty else plan_df
@@ -774,6 +783,8 @@ def build_auto_plan_citywise(emp_code, emp_name, employee_stores, pending_stores
     mine = plan_df[safe_col(plan_df, "EmployeeCode").astype(str) == str(emp_code)] \
         if not plan_df.empty else plan_df
 
+    if SKIP_SUNDAYS:
+        dates = [d for d in dates if d.weekday() != 6]
     # days that already have plans are left untouched unless "replace" is on
     busy = set()
     if not replace and not mine.empty and "VisitDate" in mine.columns:
@@ -916,7 +927,9 @@ def render_auto_planner_all():
 
     c3, c4, c5 = st.columns(3)
     with c3:
-        inc_sun = st.checkbox("Include Sundays", value=not SKIP_SUNDAYS, key="apa_sun")
+        inc_sun = not SKIP_SUNDAYS
+        st.checkbox("Include Sundays", value=False, disabled=True, key="apa_sun_locked",
+                    help="Sunday is the weekly off - plans are never created on Sundays.")
     with c4:
         replace = st.checkbox("Replace existing plans on these dates", value=False, key="apa_replace")
     with c5:
@@ -999,7 +1012,7 @@ def render_auto_planner_all():
     unfit = sum(s["Could Not Fit"] for s in state["summary"])
     if unfit:
         st.warning(f"⚠️ {unfit} pending store(s) could not fit. Increase stores per day, "
-                   f"widen the date range, or include Sundays.")
+                   f"or widen the date range (Sundays are always off).")
     if state["replace"]:
         st.error(f"🗑️ Existing plans of ALL listed employees between "
                  f"{state['dates'][0].strftime('%d %b')} and {state['dates'][-1].strftime('%d %b %Y')} "
