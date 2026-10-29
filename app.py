@@ -1908,9 +1908,13 @@ else:
                 sel_label = st.selectbox("Select store", list(store_options.keys()), key="marquee_quick_store")
             with colB:
                 marquee_plan_date = st.date_input("📅 Plan for date", key="marquee_plan_date", **plan_date_kwargs())
+                _q_sun = SKIP_SUNDAYS and marquee_plan_date.weekday() == 6
+                if _q_sun:
+                    st.error("🚫 Sunday is a weekly off - choose another date.")
             with colC:
                 st.markdown("<br>", unsafe_allow_html=True)
-                confirm_clicked = st.button("✅ Plan It", key="marquee_confirm", use_container_width=True)
+                confirm_clicked = st.button("✅ Plan It", key="marquee_confirm", use_container_width=True,
+                                            disabled=_q_sun)
 
             if confirm_clicked:
                 sel_sid = store_options.get(sel_label)
@@ -1978,6 +1982,11 @@ else:
             st.markdown("<br>", unsafe_allow_html=True)
             if st.button("🔍 Load Stores", use_container_width=True):
                 st.session_state.selected_cities = sel_cities
+
+        if SKIP_SUNDAYS and visit_date.weekday() == 6:
+            st.error(f"🚫 {visit_date.strftime('%d %b %Y')} is a Sunday - weekly off. "
+                     f"No plan can be made on Sundays. Please select another date.")
+            st.stop()
 
         daily_plans = st.session_state.planned_df[
             (safe_col(st.session_state.planned_df, "EmployeeCode").astype(str) == str(emp_code)) &
@@ -2128,6 +2137,11 @@ else:
             with col_date:
                 plan_for_date = st.date_input("📅 Plan for date", key="pend_store_plan_date", **plan_date_kwargs())
 
+            is_sunday = SKIP_SUNDAYS and plan_for_date.weekday() == 6
+            if is_sunday:
+                st.error(f"🚫 {plan_for_date.strftime('%d %b %Y')} is a Sunday - weekly off. "
+                         f"Select a working day to plan stores.")
+
             view_df = pend_stores.copy()
             if search_q.strip():
                 q = search_q.strip().lower()
@@ -2162,7 +2176,9 @@ else:
                         </div>""", unsafe_allow_html=True)
                 with col2:
                     st.markdown("<br><br>", unsafe_allow_html=True)
-                    if slots_left <= 0:
+                    if is_sunday:
+                        st.button("🚫 Off", key=f"plan_pending_{idx}", disabled=True)
+                    elif slots_left <= 0:
                         st.button("🚫 Full", key=f"plan_pending_{idx}", disabled=True)
                     elif st.button("➕ Plan", key=f"plan_pending_{idx}"):
                         new_record = {
