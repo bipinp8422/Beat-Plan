@@ -686,7 +686,7 @@ def _bulk_delete_planned(ids):
 
 def build_auto_plan(emp_code, emp_name, employee_stores, pending_stores,
                     dates, per_day, replace, topup):
-    """Returns (rows, unplaced_count). Pending stores first, then optional top-up to the daily minimum."""
+    """Classic mode. Returns (rows, unplaced_count). Pending stores first, then optional top-up to the daily minimum."""
     plan_df = st.session_state.planned_df
     mine = plan_df[safe_col(plan_df, "EmployeeCode").astype(str) == str(emp_code)] \
         if not plan_df.empty else plan_df
@@ -748,6 +748,135 @@ def build_auto_plan(emp_code, emp_name, employee_stores, pending_stores,
     return rows, unplaced
 
 
+def _even_chunks(items, per_day):
+    """Split into the fewest days possible with balanced sizes (7 @5/day -> 4+3, not 5+2)."""
+    n = len(items)
+    if n == 0:
+        return []
+    days = -(-n // per_day)
+    base, extra = divmod(n, days)
+    out, i = [], 0
+    for k in range(days):
+        size = base + (1 if k < extra else 0)
+        out.append(items[i:i + size])
+        i += size
+    return out
+
+
+def build_auto_plan_citywise(emp_code, emp_name, employee_stores, pending_stores,
+                             dates, per_day, replace, topup, city_order="Most stores first"):
+    """City-wise mode: one city per day, next city on the next day (like a field rep's route).
+    Returns (rows, unplaced_count)."""
+    plan_df = st.session_state.planned_df
+    mine = plan_df[safe_col(plan_df, "EmployeeCode").astype(str) == str(emp_code)] \
+        if not plan_df.empty else plan_df
+
+    # days that already have plans are left untouched unless "replace" is on
+    busy = set()
+    if not replace and not mine.empty and "VisitDate" in mine.columns:
+        busy = set(mine["VisitDate"].dropna())
+    free_days = [d for d in dates if d not in busy]
+
+    per_day = max(min(int(per_day), MAX_VISITS_PER_DAY), MIN_VISITS_PER_DAY)
+
+    def sid(s):
+        return str(s.get("StoreID", ""))
+
+    def city_of(s):
+        return str(s.get("City", "")).strip() or "—"
+
+    def _row(s, d, typ):
+        return {
+            "EmployeeCode": emp_code, "EmployeeName": emp_name,
+            "City": s.get("City", ""), "Store": s.get("StoreName", ""),
+            "StoreID": s.get("StoreID", ""), "GSTNumber": s.get("GSTNumber", ""),
+            "VisitDate": d, "Type": typ,
+        }
+
+    all_by_city, pend_by_city = {}, {}
+    for s in (employee_stores.to_dict("records") if not employee_stores.empty else []):
+        all_by_city.setdefault(city_of(s), []).append(s)
+    for s in (pending_stores.to_dict("records") if not pending_stores.empty else []):
+        pend_by_city.setdefault(city_of(s), []).append(s)
+    for dct in (all_by_city, pend_by_city):
+        for c in dct:
+            dct[c].sort(key=lambda x: str(x.get("StoreName", "")))
+
+    if city_order == "Most stores first":
+        cities = sorted(pend_by_city, key=lambda c: (-len(pend_by_city[c]), c))
+    else:
+        cities = sorted(pend_by_city)
+
+    # ---- build day-blocks (each block = one day) ----
+    blocks, small = [], []
+    for city in cities:
+        for chunk in _even_chunks(pend_by_city[city], per_day):
+            items = [(s, "New") for s in chunk]
+            if len(items) < MIN_VISITS_PER_DAY and topup:
+                ids = {sid(s) for s in chunk}
+                for s in all_by_city.get(city, []):
+                    if len(items) >= MIN_VISITS_PER_DAY:
+                        break
+                    if sid(s) in ids:
+                        continue
+                    items.append((s, "Top-up"))
+                    ids.add(sid(s))
+            if len(items) >= MIN_VISITS_PER_DAY:
+                blocks.append(items)
+            else:
+                # city too small even after top-up -> merge with other small cities
+                small.extend(i for i in items if i[1] == "New")
+
+    if small:
+        small.sort(key=lambda x: (city_of(x[0]), str(x[0].get("StoreName", ""))))
+        every = [s for c in sorted(all_by_city) for s in all_by_city[c]]
+        for chunk in _even_chunks(small, per_day):
+            items = list(chunk)
+            if len(items) < MIN_VISITS_PER_DAY and topup:
+                ids = {sid(s) for s, _ in items}
+                for s in every:
+                    if len(items) >= MIN_VISITS_PER_DAY:
+                        break
+                    if sid(s) in ids:
+                        continue
+                    items.append((s, "Top-up"))
+                    ids.add(sid(s))
+            blocks.append(items)
+
+    # ---- place blocks on consecutive free days ----
+    rows, unplaced, used = [], 0, 0
+    for items in blocks:
+        if used < len(free_days):
+            d = free_days[used]
+            used += 1
+            rows.extend(_row(s, d, t) for s, t in items)
+        else:
+            unplaced += sum(1 for _, t in items if t == "New")
+
+    # ---- leftover empty days: rotate cities (repeat visits), one city per day ----
+    if topup:
+        leftover_days = free_days[used:]
+        rot = [c for c in (cities + sorted(set(all_by_city) - set(cities)))
+               if len(all_by_city.get(c, [])) >= MIN_VISITS_PER_DAY]
+        ptr = {c: 0 for c in rot}
+        fallback = [s for c in sorted(all_by_city) for s in all_by_city[c]]
+        fb_ptr = 0
+        for k, d in enumerate(leftover_days):
+            if rot:
+                c = rot[k % len(rot)]
+                pool = all_by_city[c]
+                picks = [pool[(ptr[c] + i) % len(pool)] for i in range(MIN_VISITS_PER_DAY)]
+                ptr[c] += MIN_VISITS_PER_DAY
+            elif len(fallback) >= MIN_VISITS_PER_DAY:
+                picks = [fallback[(fb_ptr + i) % len(fallback)] for i in range(MIN_VISITS_PER_DAY)]
+                fb_ptr += MIN_VISITS_PER_DAY
+            else:
+                break
+            rows.extend(_row(s, d, "Top-up") for s in picks)
+
+    return rows, unplaced
+
+
 def _pending_excluding_dates(emp_code, stores, dates):
     """Never-planned stores for an employee, ignoring plans that fall on `dates`
     (used when those dates are about to be replaced)."""
@@ -791,6 +920,18 @@ def render_auto_planner_all():
         topup = st.checkbox(f"Top up days to {MIN_VISITS_PER_DAY} with repeat visits",
                             value=True, key="apa_topup")
 
+    c6, c7 = st.columns(2)
+    with c6:
+        city_wise = st.checkbox("🏙️ City-wise plan (one city per day)", value=True, key="apa_citywise")
+    with c7:
+        city_order = st.selectbox("City order", ["Most stores first", "A–Z"],
+                                  key="apa_city_order", disabled=not city_wise)
+
+    if city_wise:
+        st.caption("🏙️ Each day covers one city; the next city is planned on the next day. "
+                   "Big cities are split into balanced days, small cities are merged into a mixed day "
+                   "so every day still meets the minimum.")
+
     if st.button("🔍 Generate Preview for ALL Employees", key="apa_preview_btn", use_container_width=True):
         if not (isinstance(rng, (list, tuple)) and len(rng) == 2):
             st.error("Select both a start and an end date.")
@@ -814,7 +955,12 @@ def render_auto_planner_all():
                             continue
                         pend = _pending_excluding_dates(ec, stores, dates) if replace \
                             else get_pending_stores_for_employee(ec)
-                        rows, unplaced = build_auto_plan(ec, en, stores, pend, dates, per_day, replace, topup)
+                        if city_wise:
+                            rows, unplaced = build_auto_plan_citywise(
+                                ec, en, stores, pend, dates, per_day, replace, topup, city_order)
+                        else:
+                            rows, unplaced = build_auto_plan(
+                                ec, en, stores, pend, dates, per_day, replace, topup)
                         all_rows.extend(rows)
                         codes.append(ec)
                         summary.append({
@@ -859,6 +1005,17 @@ def render_auto_planner_all():
     st.markdown("#### 📊 Employee-wise summary")
     st.dataframe(pd.DataFrame(state["summary"]), use_container_width=True, hide_index=True)
 
+    # Day-wise city schedule (what each employee does on each date)
+    sched = (pd.DataFrame(rows)
+             .groupby(["EmployeeCode", "EmployeeName", "VisitDate"])
+             .agg(City=("City", lambda s: " + ".join(sorted(set(map(str, s))))),
+                  Visits=("StoreID", "count"))
+             .reset_index())
+    sched["Day"] = pd.to_datetime(sched["VisitDate"]).dt.strftime("%a")
+    with st.expander("🗓️ Day-wise city schedule"):
+        st.dataframe(sched[["EmployeeCode", "EmployeeName", "VisitDate", "Day", "City", "Visits"]],
+                     use_container_width=True, hide_index=True)
+
     prev = pd.DataFrame(rows)[["EmployeeCode", "EmployeeName", "VisitDate", "Store",
                                "City", "StoreID", "GSTNumber", "Type"]] \
         .sort_values(["EmployeeCode", "VisitDate", "City", "Store"])
@@ -868,6 +1025,7 @@ def render_auto_planner_all():
     out = io.BytesIO()
     with pd.ExcelWriter(out, engine="openpyxl") as w:
         prev.to_excel(w, index=False, sheet_name="Auto Plan Preview")
+        sched.to_excel(w, index=False, sheet_name="Day-wise City Schedule")
     out.seek(0)
     st.download_button("📥 Download Preview (Excel)", data=out.getvalue(),
                        file_name=f"Auto_Plan_Preview_{date.today().strftime('%Y-%m-%d')}.xlsx",
