@@ -34,6 +34,7 @@ except Exception as e:
 # ====================== BUSINESS RULES ======================
 MIN_VISITS_PER_DAY = 3      # a day with fewer visits is NOT considered submitted
 MAX_VISITS_PER_DAY = 10
+AUTO_MIN_PER_DAY = 5        # auto planner: every planned day has at least this many stores
 SKIP_SUNDAYS = False        # set True if Sundays don't need a plan
 PLAN_ONLY_NEXT_MONTH = True # True = employees can only plan dates in NEXT calendar month
 
@@ -735,7 +736,7 @@ def build_auto_plan(emp_code, emp_name, employee_stores, pending_stores,
         for d in dates:
             ids = day_ids[d]
             tries = 0
-            while len(ids) < MIN_VISITS_PER_DAY and tries < len(pool) * 2:
+            while len(ids) < AUTO_MIN_PER_DAY and tries < len(pool) * 2:
                 s = pool[p % len(pool)]
                 p += 1
                 tries += 1
@@ -748,12 +749,14 @@ def build_auto_plan(emp_code, emp_name, employee_stores, pending_stores,
     return rows, unplaced
 
 
-def _even_chunks(items, per_day):
-    """Split into the fewest days possible with balanced sizes (7 @5/day -> 4+3, not 5+2)."""
+def _even_chunks(items, target):
+    """Split one city's stores into days. Every day gets at least `target` stores
+    (e.g. 7 stores @ target 5 -> ONE day of 7; 12 -> 2 days of 6), never above MAX_VISITS_PER_DAY.
+    A city with fewer than `target` stores stays as one (short) day and is topped up / merged later."""
     n = len(items)
     if n == 0:
         return []
-    days = -(-n // per_day)
+    days = max(n // target, -(-n // MAX_VISITS_PER_DAY), 1)
     base, extra = divmod(n, days)
     out, i = [], 0
     for k in range(days):
@@ -777,7 +780,7 @@ def build_auto_plan_citywise(emp_code, emp_name, employee_stores, pending_stores
         busy = set(mine["VisitDate"].dropna())
     free_days = [d for d in dates if d not in busy]
 
-    per_day = max(min(int(per_day), MAX_VISITS_PER_DAY), MIN_VISITS_PER_DAY)
+    per_day = max(min(int(per_day), MAX_VISITS_PER_DAY), AUTO_MIN_PER_DAY)
 
     def sid(s):
         return str(s.get("StoreID", ""))
@@ -812,16 +815,16 @@ def build_auto_plan_citywise(emp_code, emp_name, employee_stores, pending_stores
     for city in cities:
         for chunk in _even_chunks(pend_by_city[city], per_day):
             items = [(s, "New") for s in chunk]
-            if len(items) < MIN_VISITS_PER_DAY and topup:
+            if len(items) < AUTO_MIN_PER_DAY and topup:
                 ids = {sid(s) for s in chunk}
                 for s in all_by_city.get(city, []):
-                    if len(items) >= MIN_VISITS_PER_DAY:
+                    if len(items) >= AUTO_MIN_PER_DAY:
                         break
                     if sid(s) in ids:
                         continue
                     items.append((s, "Top-up"))
                     ids.add(sid(s))
-            if len(items) >= MIN_VISITS_PER_DAY:
+            if len(items) >= AUTO_MIN_PER_DAY:
                 blocks.append(items)
             else:
                 # city too small even after top-up -> merge with other small cities
@@ -832,10 +835,10 @@ def build_auto_plan_citywise(emp_code, emp_name, employee_stores, pending_stores
         every = [s for c in sorted(all_by_city) for s in all_by_city[c]]
         for chunk in _even_chunks(small, per_day):
             items = list(chunk)
-            if len(items) < MIN_VISITS_PER_DAY and topup:
+            if len(items) < AUTO_MIN_PER_DAY and topup:
                 ids = {sid(s) for s, _ in items}
                 for s in every:
-                    if len(items) >= MIN_VISITS_PER_DAY:
+                    if len(items) >= AUTO_MIN_PER_DAY:
                         break
                     if sid(s) in ids:
                         continue
@@ -857,7 +860,7 @@ def build_auto_plan_citywise(emp_code, emp_name, employee_stores, pending_stores
     if topup:
         leftover_days = free_days[used:]
         rot = [c for c in (cities + sorted(set(all_by_city) - set(cities)))
-               if len(all_by_city.get(c, [])) >= MIN_VISITS_PER_DAY]
+               if len(all_by_city.get(c, [])) >= AUTO_MIN_PER_DAY]
         ptr = {c: 0 for c in rot}
         fallback = [s for c in sorted(all_by_city) for s in all_by_city[c]]
         fb_ptr = 0
@@ -865,11 +868,11 @@ def build_auto_plan_citywise(emp_code, emp_name, employee_stores, pending_stores
             if rot:
                 c = rot[k % len(rot)]
                 pool = all_by_city[c]
-                picks = [pool[(ptr[c] + i) % len(pool)] for i in range(MIN_VISITS_PER_DAY)]
-                ptr[c] += MIN_VISITS_PER_DAY
-            elif len(fallback) >= MIN_VISITS_PER_DAY:
-                picks = [fallback[(fb_ptr + i) % len(fallback)] for i in range(MIN_VISITS_PER_DAY)]
-                fb_ptr += MIN_VISITS_PER_DAY
+                picks = [pool[(ptr[c] + i) % len(pool)] for i in range(AUTO_MIN_PER_DAY)]
+                ptr[c] += AUTO_MIN_PER_DAY
+            elif len(fallback) >= AUTO_MIN_PER_DAY:
+                picks = [fallback[(fb_ptr + i) % len(fallback)] for i in range(AUTO_MIN_PER_DAY)]
+                fb_ptr += AUTO_MIN_PER_DAY
             else:
                 break
             rows.extend(_row(s, d, "Top-up") for s in picks)
@@ -908,8 +911,8 @@ def render_auto_planner_all():
             rng = st.date_input("📅 Date range",
                                 value=(date.today(), date.today() + timedelta(days=29)), key="apa_range")
     with c2:
-        per_day = st.number_input("Stores per day", MIN_VISITS_PER_DAY, MAX_VISITS_PER_DAY,
-                                  MIN_VISITS_PER_DAY, key="apa_per_day")
+        per_day = st.number_input(f"Stores per day (min {AUTO_MIN_PER_DAY})", AUTO_MIN_PER_DAY,
+                                  MAX_VISITS_PER_DAY, AUTO_MIN_PER_DAY, key="apa_per_day_v2")
 
     c3, c4, c5 = st.columns(3)
     with c3:
@@ -917,7 +920,7 @@ def render_auto_planner_all():
     with c4:
         replace = st.checkbox("Replace existing plans on these dates", value=False, key="apa_replace")
     with c5:
-        topup = st.checkbox(f"Top up days to {MIN_VISITS_PER_DAY} with repeat visits",
+        topup = st.checkbox(f"Top up days to {AUTO_MIN_PER_DAY} with repeat visits",
                             value=True, key="apa_topup")
 
     c6, c7 = st.columns(2)
@@ -928,9 +931,9 @@ def render_auto_planner_all():
                                   key="apa_city_order", disabled=not city_wise)
 
     if city_wise:
-        st.caption("🏙️ Each day covers one city; the next city is planned on the next day. "
-                   "Big cities are split into balanced days, small cities are merged into a mixed day "
-                   "so every day still meets the minimum.")
+        st.caption(f"🏙️ Plans are built per employee from THEIR OWN stores: all stores of one city go on the "
+                   f"same day (at least {AUTO_MIN_PER_DAY}, max {MAX_VISITS_PER_DAY}), then the next city on the next day. "
+                   f"Two employees in the same city each get their own independent schedule.")
 
     if st.button("🔍 Generate Preview for ALL Employees", key="apa_preview_btn", use_container_width=True):
         if not (isinstance(rng, (list, tuple)) and len(rng) == 2):
