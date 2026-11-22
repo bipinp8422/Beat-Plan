@@ -362,7 +362,27 @@ def _delete_eq(table, col, val):
         raise
 
 
+def _update_eq(table, col, val, updates):
+    """Update rows where col == val. Falls back to lowercase column names if needed."""
+    updates = _clean_record(updates)
+    try:
+        return supabase.table(table).update(updates).eq(col, val).execute()
+    except Exception as e:
+        msg = str(e)
+        if any(x in msg for x in ("PGRST204", "42703", "schema cache", "does not exist")):
+            low = {k.lower(): v for k, v in updates.items()}
+            return supabase.table(table).update(low).eq(col.lower(), val).execute()
+        raise
+
+
 def insert_planned_visit(record: dict):
+    if not str(record.get("City", "") or "").strip() or str(record.get("City", "")).strip().lower() == "nan":
+        st.error(f"🚫 '{record.get('Store', 'This store')}' has a blank City. "
+                 f"Ask Admin to fix it in Manage Stores → 🛠️ Fix Blank Data.")
+        return None
+    if not str(record.get("StoreID", "") or "").strip():
+        st.error(f"🚫 '{record.get('Store', 'This store')}' has no StoreID. Ask Admin to fix it.")
+        return None
     if PLAN_ONLY_NEXT_MONTH:
         _first, _last = get_plan_window()
         _vd = pd.to_datetime(record.get("VisitDate"), errors="coerce")
@@ -924,6 +944,15 @@ def render_auto_planner_all():
     if emp_df.empty or "EmployeeCode" not in emp_df.columns:
         st.info("No employees found.")
         return
+
+    # stores with a blank City or StoreID are excluded (they would create blank plan rows)
+    if not gst.empty:
+        _bad = (safe_col(gst, "City").astype(str).str.strip() == "") | \
+               (safe_col(gst, "StoreID").astype(str).str.strip() == "")
+        if _bad.any():
+            st.warning(f"⚠️ {int(_bad.sum())} store(s) have a blank City/StoreID and are excluded from auto planning. "
+                       f"Fix them in Manage Stores → 🛠️ Fix Blank Data.")
+            gst = gst[~_bad]
 
     c1, c2 = st.columns([3, 2])
     with c1:
@@ -1758,7 +1787,7 @@ if st.session_state.role == "admin":
     # ── MANAGE STORES ──
     elif admin_menu == "🏪 Manage Stores":
         st.markdown("### 🏪 Manage Stores")
-        tab1, tab2, tab3 = st.tabs(["👁️ View", "➕ Add", "🗑️ Delete"])
+        tab1, tab2, tab3, tab4 = st.tabs(["👁️ View", "➕ Add", "🗑️ Delete", "🛠️ Fix Blank Data"])
         with tab1:
             if not st.session_state.gst_df.empty:
                 st.dataframe(st.session_state.gst_df, use_container_width=True, hide_index=True)
@@ -1826,6 +1855,91 @@ if st.session_state.role == "admin":
                         ].reset_index(drop=True)
                         st.success(f"✅ {sdel} deleted!")
                         st.rerun()
+
+        with tab4:
+            gdf = st.session_state.gst_df
+            st.caption("Stores with a blank City or GST Number. Fill them in and save — "
+                       "then backfill old plan rows below.")
+            if gdf.empty:
+                st.info("No stores.")
+            else:
+                blank = (safe_col(gdf, "City").astype(str).str.strip() == "") | \
+                        (safe_col(gdf, "GSTNumber").astype(str).str.strip() == "")
+                bad = gdf[blank]
+                if bad.empty:
+                    st.success("✅ No stores with blank City / GST.")
+                else:
+                    st.warning(f"⚠️ {len(bad)} store(s) have blank City or GST Number.")
+                    cols_show = [c for c in ["StoreID", "StoreName", "City", "GSTNumber", "EmployeeCode"] if c in bad.columns]
+                    edited = st.data_editor(
+                        bad[cols_show].reset_index(drop=True), hide_index=True,
+                        use_container_width=True, key="fix_blank_editor",
+                        disabled=[c for c in cols_show if c not in ("City", "GSTNumber")],
+                    )
+                    if st.button("💾 Save fixes", type="primary", key="fix_blank_save"):
+                        saved_n, errs = 0, []
+                        for _, r in edited.iterrows():
+                            sid_ = str(r.get("StoreID", "")).strip()
+                            new_city = str(r.get("City", "") or "").strip().title()
+                            new_gst = str(r.get("GSTNumber", "") or "").strip().upper()
+                            if new_city.lower() == "nan": new_city = ""
+                            if new_gst.lower() == "nan": new_gst = ""
+                            upd = {}
+                            if new_city:
+                                upd["City"] = new_city
+                            if new_gst:
+                                if is_valid_gstin(new_gst):
+                                    upd["GSTNumber"] = new_gst
+                                else:
+                                    errs.append(f"{sid_}: invalid GST '{new_gst}'")
+                            if not upd or not sid_:
+                                continue
+                            try:
+                                _update_eq("gst_master", "StoreID", sid_, upd)
+                                for k_, v_ in upd.items():
+                                    st.session_state.gst_df.loc[
+                                        st.session_state.gst_df["StoreID"].astype(str) == sid_, k_] = v_
+                                saved_n += 1
+                            except Exception as ex:
+                                errs.append(f"{sid_}: {ex}")
+                        if saved_n:
+                            st.success(f"✅ {saved_n} store(s) updated.")
+                        for e_ in errs:
+                            st.error(e_)
+                        if saved_n and not errs:
+                            st.rerun()
+
+            st.markdown("---")
+            st.markdown("#### 🔁 Backfill blank City in saved plans")
+            st.caption("Copies City from the store master into existing plan rows where City is blank.")
+            if st.button("🔁 Backfill City in planned visits", key="backfill_city"):
+                pdf = st.session_state.planned_df
+                gdf2 = st.session_state.gst_df
+                if pdf.empty or "id" not in pdf.columns or gdf2.empty:
+                    st.info("Nothing to backfill.")
+                else:
+                    city_map = {str(a).strip(): str(b).strip()
+                                for a, b in zip(gdf2["StoreID"], safe_col(gdf2, "City")) if str(b).strip()}
+                    todo = pdf[safe_col(pdf, "City").astype(str).str.strip() == ""]
+                    n_ok, bar = 0, st.progress(0.0, text="Updating…")
+                    for i_, (_, r) in enumerate(todo.iterrows()):
+                        c_ = city_map.get(str(r.get("StoreID", "")).strip())
+                        if c_ and str(r.get("id", "")).lower() not in ("", "nan", "none"):
+                            try:
+                                supabase.table("planned_visits").update(
+                                    {"city": c_}).eq("id", int(r["id"])).execute()
+                                n_ok += 1
+                            except Exception:
+                                try:
+                                    supabase.table("planned_visits").update(
+                                        {"City": c_}).eq("id", int(r["id"])).execute()
+                                    n_ok += 1
+                                except Exception as ex:
+                                    st.error(f"Row {r['id']}: {ex}")
+                                    break
+                        bar.progress((i_ + 1) / max(len(todo), 1))
+                    st.session_state.planned_df = load_from_supabase("planned_visits", PLAN_COLS, keep_id=True)
+                    st.success(f"✅ {n_ok} plan row(s) updated.")
 
     # ── VIEW PLANS ──
     elif admin_menu == "📋 View Plans":
